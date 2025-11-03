@@ -8,8 +8,6 @@ PositionEmbs = Tuple[
     at.Float[torch.Tensor, "*batch_size n_q head_dim"], at.Float[torch.Tensor, "*batch_size n_q head_dim"]
 ]
 
-PrefixPadMask = at.Bool[torch.Tensor, "*batch_size n_past_kv"]
-
 
 AttentionMask = at.Bool[torch.Tensor, "*batch_size 1 n_q n_kv"]
 AdarmsCond = at.Float[torch.Tensor, "*batch_size cond_dim"]
@@ -17,6 +15,8 @@ KVCache = Tuple[
     at.Float[torch.Tensor, "*batch_size depth n_past_kv n_kv_heads head_dim"],
     at.Float[torch.Tensor, "*batch_size depth n_past_kv n_kv_heads head_dim"],
 ]
+
+PrefixPadMask = at.Bool[torch.Tensor, "*batch_size n_past_kv"]
 
 __all__ = [
     "HiddenState",

@@ -1,179 +1,170 @@
-from typing import TypeAlias, Dict
-
-import torch
-import numpy as np
+import time
 from pathlib import Path
+from typing import Any, Dict, Mapping, Sequence, SupportsIndex, Tuple
 
-from vla_scratch.datasets.data_types import ActionChunk, DataSample, Observation
-from vla_scratch.datasets.math_utils import (
-    matrix_from_quat,
-    quat_mul,
-    quat_conjugate,
-    quat_from_angle_axis,
-    quat_apply,
-    quat_apply_inverse,
-    unscale_transform,
-    scale_transform,
+import jaxtyping as at
+import numpy as np
+import torch
+from tensordict import TensorClass, TensorDict
+from torch.utils.data import Dataset
+
+from vla_scratch.datasets.common import (
+    PROCESSED_ACTION_KEY,
+    PROCESSED_IMAGE_KEY,
+    PROCESSED_IMAGE_MASK_KEY,
+    PROCESSED_STATE_KEY,
+    TOKENIZED_KEY,
+    TOKENIZED_MASK_KEY,
 )
-
-DataDict: TypeAlias = Dict
+from vla_scratch.datasets.data_types import ActionChunk, DataSample, Observation
 
 
 class TransformFn:
-    def compute(self, sample: DataDict) -> DataDict:
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__}()"
+
+    def compute(self, sample: Dict) -> Dict:
         raise NotImplementedError
 
 
-def _rotation_matrix_to_6d(R: torch.Tensor) -> torch.Tensor:
-    if R.shape[-2:] != (3, 3):
-        raise ValueError(f"Rotation matrix must be (..., 3, 3), got {R.shape}")
-    return R[..., :2, :].reshape(*R.shape[:-2], 6)
+class TransformedDataset(Dataset):
+    @staticmethod
+    def collate_fn(batch):
+        return tuple(torch.stack(items) for items in zip(*batch))
+
+    def __init__(self, dataset: Dataset, transforms: Sequence[TransformFn]):
+        self.base_dataset = dataset
+        self.transforms = list(transforms)
+        self._log_names = [tr.__repr__() for tr in self.transforms]
+
+    def __getitem__(self, index: SupportsIndex) -> Tuple[Any, TensorDict]:
+        perf: Dict[str, float] = {}
+
+        start = time.perf_counter()
+        sample = self.base_dataset[index]
+        perf["base_dataset_load"] = time.perf_counter() - start
+
+        for transform, name in zip(self.transforms, self._log_names):
+            start = time.perf_counter()
+            sample = transform.compute(sample)
+            perf[name] = time.perf_counter() - start
+
+        return sample, TensorDict(perf)
+
+    def __len__(self) -> int:
+        return len(self.base_dataset)
 
 
-class LiberoProprio(TransformFn):
-    actions_low = torch.tensor([-0.05, -0.05, -0.05, -0.5, -0.5, -0.5, -1.0])
-    actions_high = torch.tensor([0.05, 0.05, 0.05, 0.5, 0.5, 0.5, 1.0])
-
-    def compute(self, sample: DataDict) -> DataDict:
-        """Transform LIBERO state/action into relative pose and target deltas.
-
-        Expects sample to contain:
-          - state: Tensor [T, D>=9] with layout [gripper0, gripper1, eef_pos(3), eef_quat_wxyz(4), ...]
-                   where T = history + horizon and index of t is history
-          - actions: Tensor [horizon, 7] with layout [dpos(3), daxis_angle(3), gripper(1)]
-
-        Produces:
-          - state: Tensor [H*(9 + 2)] = concat over history of [Δpos(3), Δori6d(6), gripper(2)]
-          - actions: Tensor [horizon, 10] = per future step [Δpos_to_target(3), Δori6d_to_target(6), gripper(1)]
-        """
-        state_seq: torch.Tensor = sample["state"]
-        actions_seq: torch.Tensor = sample["actions"]
-
-        actions_seq = unscale_transform(
-            actions_seq, LiberoProprio.actions_low, LiberoProprio.actions_high
-        )
-
-        T, state_dim = state_seq.shape
-        horizon, action_dim = actions_seq.shape
-        assert state_dim == 9, "Expected state dim 9 for LIBERO"
-        assert action_dim == 7, "Expected action dim 7 for LIBERO"
-
-        history = T - horizon
-        if history < 0:
-            raise ValueError(
-                f"Invalid lengths: T={T}, K={horizon} imply history={history} < 0; expected T = H + 1 + K"
-            )
-
-        # Parse positions and orientations from state window
-        pos_seq = state_seq[:, 2:5]
-        quat_wxyz_seq = state_seq[:, 5:9]
-        # Current frame index (t) in the loaded window
-        current_t = history
-        current_pos_w = pos_seq[current_t]
-        current_quat_w = quat_wxyz_seq[current_t]
-
-        # Build state: relative pose of past H states to current t, plus current grippers
-        # Δpos in current frame
-        history_pos_w = pos_seq[:history]  # [H, 3] corresponds to states t-H-1 ... t-2
-        # Δpos: express in current frame using quaternion inverse apply
-        current_quat_w_hist = current_quat_w.unsqueeze(0).expand(history, -1)
-        history_dpos = quat_apply_inverse(
-            current_quat_w_hist, history_pos_w - current_pos_w
-        )
-        # Δori: q_hist ⊖ q_current -> convert to 6D
-        history_quat_w = quat_wxyz_seq[:history]
-        history_dquat = quat_mul(quat_conjugate(current_quat_w_hist), history_quat_w)
-        history_drotmat = matrix_from_quat(history_dquat)
-        history_dori6d = _rotation_matrix_to_6d(history_drotmat)
-        # gripper state
-        history_grippers = state_seq[:history, 0:2]  # [H, 2] (not used in output state)
-
-        state_vec = torch.cat(
-            [history_dpos, history_dori6d, history_grippers], dim=-1
-        )  # [H, 3 + 6 + 2]
-
-        # Build future action targets (per-step target pose expressed relative to current t)
-        future_pos_w = pos_seq[current_t : current_t + horizon]  # [K, 3]
-        future_quat_w = quat_wxyz_seq[current_t : current_t + horizon]  # [K, 4]
-        cmd_dpos = actions_seq[:, 0:3]
-        cmd_drotvec = actions_seq[:, 3:6]
-        cmd_grippers = actions_seq[:, 6:7]
-
-        future_cmd_pos_w = future_pos_w + quat_apply(future_quat_w, cmd_dpos)
-
-        delta_angle = torch.linalg.norm(cmd_drotvec, dim=-1)
-        delta_quat = quat_from_angle_axis(delta_angle, cmd_drotvec)
-        future_cmd_quat_w = quat_mul(future_quat_w, delta_quat)
-
-        current_quat_w_expand = current_quat_w.unsqueeze(0).expand_as(future_cmd_quat_w)
-        target_dpos = quat_apply_inverse(
-            current_quat_w_expand, future_cmd_pos_w - current_pos_w
-        )
-        target_dquat = quat_mul(
-            quat_conjugate(current_quat_w_expand), future_cmd_quat_w
-        )
-        target_drotmat = matrix_from_quat(target_dquat)
-        target_dori6d = _rotation_matrix_to_6d(target_drotmat)
-
-        actions_out = torch.cat([target_dpos, target_dori6d, cmd_grippers], dim=-1)
-
-        sample["state"] = state_vec
-        sample["actions"] = actions_out
-        return sample
+class FieldNormStats(TensorClass):
+    mean_: at.Float[torch.Tensor, "*feature_dim"]
+    std_: at.Float[torch.Tensor, "*feature_dim"]
+    q01: at.Float[torch.Tensor, "*feature_dim"]
+    q99: at.Float[torch.Tensor, "*feature_dim"]
 
 
-class ToTensorClass(TransformFn):
-    def compute(self, sample: DataDict) -> DataDict:
-        observation = Observation(
-            images=sample["images"],
-            image_masks=sample["image_masks"],
-            state=sample["state"],
-            tokenized_prompt=sample["tokenized_prompt"],
-            tokenized_prompt_mask=sample["tokenized_prompt_mask"],
-        )
-        action = ActionChunk(actions=sample["actions"])
-        data_sample = DataSample(observation=observation, action=action)
-        return data_sample
+NormStats = Dict[str, FieldNormStats]
 
 
 class Normalize(TransformFn):
-    """Percentile normalize state/actions and clip to [-1.5, 1.5].
+    def __init__(
+        self,
+        norm_stats: Dict[str, FieldNormStats],
+        *,
+        use_quantiles: bool = True,
+        strict: bool = False,
+    ) -> None:
+        self.norm_stats = norm_stats
+        self.use_quantiles = use_quantiles
+        self.strict = strict
 
-    For each feature i, maps p2->-1 and p98->+1 via
-        y_i = 2 * (x_i - p02_i) / (p98_i - p02_i) - 1
-    then clips y to [-1.5, 1.5].
-
-    The stats file may be .npz (numpy), .pt/.pth (torch.load dict), or .json.
-    It should contain keys: "states_p02", "states_p98", "actions_p02", "actions_p98".
-    Each array can be either length equal to the last-dimension size (per-feature),
-    or equal to the total number of elements when the tensor is flattened
-    (applied in flattened order then reshaped back).
-    """
-
-    def __init__(self, stats_file: Path):
-        stats_path = Path(stats_file)
-        data = np.load(str(stats_path))
-
-        def to_tensor(name: str) -> torch.Tensor:
-            arr = data.get(name)
-            return torch.from_numpy(arr).type(torch.float32)
-
-        self._state_p02 = to_tensor("states_p02")
-        self._state_p98 = to_tensor("states_p98")
-        self._action_p02 = to_tensor("actions_p02")
-        self._action_p98 = to_tensor("actions_p98")
-
-    def _scale_clip(
-        self, x: torch.Tensor, p02: torch.Tensor, p98: torch.Tensor
-    ) -> torch.Tensor:
-        scaled = scale_transform(x, p02, p98)
-        return torch.clamp(scaled, -1.5, 1.5)
-
-    def compute(self, sample: DataDict) -> DataDict:
-        state = sample.get("state")
-        actions = sample.get("actions")
-        sample["state"] = self._scale_clip(state, self._state_p02, self._state_p98)
-        sample["actions"] = self._scale_clip(
-            actions, self._action_p02, self._action_p98
+    def __repr__(self) -> str:
+        keys = ", ".join(sorted(self.norm_stats.keys()))
+        return (
+            f"{self.__class__.__name__}(keys=[{keys}], "
+            f"use_quantiles={self.use_quantiles}, strict={self.strict})"
         )
+
+    def compute(self, sample: Dict) -> Dict:
+        normalizer = self._normalize_quantile if self.use_quantiles else self._normalize
+        for key, stats in self.norm_stats.items():
+            if key not in sample:
+                if self.strict:
+                    raise KeyError(
+                        f"Normalization stats provided for '{key}' "
+                        "but the key is missing in the sample."
+                    )
+                continue
+            sample[key] = normalizer(sample[key], stats)
         return sample
+
+    @staticmethod
+    def _normalize(tensor: torch.Tensor, stats: FieldNormStats) -> torch.Tensor:
+        mean = stats.mean_
+        std = stats.std_
+        return ((tensor - mean) / (std + 1e-6)).clamp(-1.5, 1.5)
+
+    @staticmethod
+    def _normalize_quantile(
+        tensor: torch.Tensor, stats: FieldNormStats
+    ) -> torch.Tensor:
+        q01 = stats.q01
+        q99 = stats.q99
+        return ((tensor - q01) / (q99 - q01 + 1e-6) * 2.0 - 1.0).clamp(-1.5, 1.5)
+
+
+class ToTensorClass(TransformFn):
+    """Convert the standardized dict into structured TensorClasses."""
+
+    def compute(self, sample: Dict) -> DataSample:
+        observation = Observation(
+            images=sample[PROCESSED_IMAGE_KEY],
+            image_masks=sample.get(PROCESSED_IMAGE_MASK_KEY),
+            state=sample[PROCESSED_STATE_KEY],
+            tokenized_prompt=sample[TOKENIZED_KEY],
+            tokenized_prompt_mask=sample[TOKENIZED_MASK_KEY],
+        )
+        action = ActionChunk(actions=sample[PROCESSED_ACTION_KEY])
+        return DataSample(observation=observation, action_chunk=action)
+
+
+def load_norm_stats(path: Path) -> Dict[str, FieldNormStats]:
+    path = Path(path)
+    loaded = np.load(path, allow_pickle=True)
+    try:
+        if hasattr(loaded, "files"):
+            raw = {key: loaded[key] for key in loaded.files}
+        else:
+            raw = loaded.item()
+    finally:
+        if hasattr(loaded, "close"):
+            loaded.close()
+
+    result: Dict[str, FieldNormStats] = {}
+    for key, components in raw.items():
+        if isinstance(components, np.ndarray) and components.dtype == object:
+            components = components.item()
+        if not isinstance(components, Mapping):
+            raise TypeError(
+                f"Expected normalization entry for '{key}' to be a mapping, "
+                f"got {type(components).__name__}."
+            )
+        result[key] = FieldNormStats(
+            mean_=torch.as_tensor(components["mean_"], dtype=torch.float32),
+            std_=torch.as_tensor(components["std_"], dtype=torch.float32),
+            q01=torch.as_tensor(components["q01"], dtype=torch.float32),
+            q99=torch.as_tensor(components["q99"], dtype=torch.float32),
+        )
+    return result
+
+
+def save_norm_stats(path: Path, stats: NormStats) -> None:
+    path = Path(path)
+    flat: Dict[str, Dict[str, np.ndarray]] = {}
+    for key, value in stats.items():
+        flat[key] = {
+            "mean_": value.mean_.detach().cpu().numpy(),
+            "std_": value.std_.detach().cpu().numpy(),
+            "q01": value.q01.detach().cpu().numpy(),
+            "q99": value.q99.detach().cpu().numpy(),
+        }
+    np.savez_compressed(path, **flat)

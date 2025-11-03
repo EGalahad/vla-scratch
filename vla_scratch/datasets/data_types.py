@@ -3,6 +3,10 @@ import jaxtyping as at
 from tensordict import TensorClass
 
 
+# In the future, tokenized prompt will also include multi-task instructions and their answers.
+# In that case, a causal mask should be applied to the question answering part and a loss mask will indicate the region to compute loss on.
+
+
 class Observation(TensorClass):
     images: at.Float[torch.Tensor, "*batch num_cam 3 height width"]
     image_masks: at.Bool[torch.Tensor, "*batch num_cam 1"]
@@ -17,4 +21,4 @@ class ActionChunk(TensorClass):
 
 class DataSample(TensorClass):
     observation: Observation
-    action: ActionChunk
+    action_chunk: ActionChunk

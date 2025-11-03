@@ -122,7 +122,8 @@ class DiTConfig:
 
 
 from typing import Literal
-Variant = Literal["dummy", "gemma_300m", "gemma_300m_lora", "gemma_2b", "gemma_2b_lora"]
+Variant = Literal["dummy", "300m", "2b"]
+
 def get_config(variant: Variant) -> DiTConfig:
     """Returns config for specified gemma variant."""
     if variant == "dummy":
@@ -218,15 +219,15 @@ class Attention(nn.Module):
             h_kv=self.num_kv_heads,
             d=self.head_dim,
         )
-        # shape: q: (batch, num_heads, len_q, head_dim)
-        # shape: k, v: (batch, num_kv_heads, len_kv, head_dim)
+        # shape: q: (batch, num_heads, seq, head_dim)
+        # shape: k, v: (batch, num_kv_heads, seq, head_dim)
 
         cos, sin = position_embeddings
         q_rotate, k_rotate = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
         if kv_cache is not None:
             past_k, past_v = kv_cache
-            k_rotate = torch.cat([past_k, k_rotate], dim=2)
-            v = torch.cat([past_v, v], dim=2)
+            k_rotate = torch.cat([past_k, k_rotate], dim=-2)
+            v = torch.cat([past_v, v], dim=-2)
 
         attn_output = F.scaled_dot_product_attention(
             q_rotate,

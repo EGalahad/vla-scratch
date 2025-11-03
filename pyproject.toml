@@ -9,9 +9,10 @@ build-backend = "setuptools.build_meta"
 name = "vla-scratch"
 version = "0.1.0"
 description = "Utilities for working with VLA Scratch datasets and policies."
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "torch",
+    "torchvision==0.22.0",
     "numpy",
     "h5py",
     "transformers",
@@ -25,7 +26,24 @@ dependencies = [
     "omegaconf",
     "wandb",
     "setproctitle",
+    "pillow",
+    "setuptools",
+    # serve policy
+    "websockets",
+    "msgpack",
+    "pdbpp",
+    "datasets",
+    "jsonlines>=4.0.0",
+    "matplotlib>=3.9.4",
+    "lerobot",
+    "torchcodec>=0.5",
+    "accelerate>=1.11.0",
+    "mujoco>=3.3.7",
 ]
+
+[tool.uv.sources]
+# lerobot = { git = "https://github.com/huggingface/lerobot", rev = "d602e8169cbad9e93a4a3b3ee1dd8b332af7ebf8" }
+lerobot = { path = "../lerobot" }
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -35,11 +53,5 @@ include = [
 ]
 namespaces = true
 
-# uv-specific configuration
-# - `uv sync` installs [project.dependencies]
-# - `uv sync --dev` also installs [tool.uv].dev-dependencies
 [tool.uv]
-dev-dependencies = [
-    "pytest",
-]
 python-install-mirror = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"

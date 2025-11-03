@@ -8,14 +8,18 @@ from typing import List, Tuple, Literal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.utils.checkpoint
-
-from .config import PiConfig
-from .utils import *
-from vla_scratch.policies.data_types import *
 
 
 from vla_scratch.datasets.data_types import Observation
+from vla_scratch.policies.data_types import *
+from vla_scratch.policies.modules.dit import DiTModel, get_config
+from vla_scratch.policies.pi.utils import (
+    make_att_2d_masks,
+    attention_fill_false_to_inf,
+    create_sinusoidal_pos_embedding,
+)
+from vla_scratch.policies.utils import sample_noise
+from vla_scratch.policies.pi.config import PiConfig
 
 
 class PiPolicy(nn.Module):
@@ -23,21 +27,26 @@ class PiPolicy(nn.Module):
         super().__init__()
         self.config = config
 
-        from transformers import AutoConfig, PaliGemmaForConditionalGeneration
-        from vla_scratch.policies.modules.dit import get_config, DiTModel
+        if config.action_dim is None or config.state_dim is None:
+            raise ValueError(
+                "PiConfig.action_dim and PiConfig.state_dim must be set before "
+                "initializing PiPolicy."
+            )
 
-        # TODO: hardcode model config for now
-        vlm_hf_config = AutoConfig.from_pretrained(
-            "google/paligemma-3b-mix-224", trust_remote_code=True
+        start_time = time.time()
+        from transformers import PaliGemmaForConditionalGeneration
+
+        self.paligemma = PaliGemmaForConditionalGeneration.from_pretrained(
+            config.model_id,
+            trust_remote_code=True,
+            device_map=torch.cuda.current_device(),
         )
-        action_expert_config = get_config(config.action_expert_variant)
-
-        # vlm_hf_config.text_config.num_hidden_layers = 4
-        # vlm_hf_config.text_config.head_dim = 16
-        # action_expert_config.num_hidden_layers = 4
-        # action_expert_config.head_dim = 16
+        end_time = time.time()
+        print(f"PaliGemma model initialized in {end_time - start_time:.2f} seconds.")
 
         # number of hidden layers and head dim must match to do cross-attention at each layer
+        vlm_hf_config = self.paligemma.config
+        action_expert_config = get_config(config.action_expert_variant)
         assert (
             vlm_hf_config.text_config.num_hidden_layers
             == action_expert_config.num_hidden_layers
@@ -45,11 +54,6 @@ class PiPolicy(nn.Module):
         assert (
             vlm_hf_config.text_config.head_dim == action_expert_config.head_dim
         ), f"VLM and action expert must have the same head dim, got {vlm_hf_config.text_config.head_dim} and {action_expert_config.head_dim}"
-
-        start_time = time.time()
-        self.paligemma = PaliGemmaForConditionalGeneration(config=vlm_hf_config)
-        end_time = time.time()
-        print(f"PaliGemma model initialized in {end_time - start_time:.2f} seconds.")
 
         start_time = end_time
         self.gemma_expert = DiTModel(config=action_expert_config)
@@ -69,10 +73,15 @@ class PiPolicy(nn.Module):
         )
 
         # register buffers
-        suffix_len = config.action_horizon + config.state_history
+        if config.use_state:
+            suffix_len = config.action_horizon + config.state_history
+        else:
+            suffix_len = config.action_horizon
         suffix_pad_mask = torch.ones(suffix_len, dtype=torch.bool)
         suffix_att_mask = torch.zeros(suffix_len, dtype=torch.bool)
-        suffix_att_mask[0] = 1 # create a new attention block for the suffix, prefix should not attend to suffix
+        suffix_att_mask[0] = 1
+        # create a new attention block for the suffix, prefix should not attend to suffix
+
         self.register_buffer("suffix_pad_mask", suffix_pad_mask, persistent=False)
         self.register_buffer("suffix_att_mask", suffix_att_mask, persistent=False)
         self.suffix_pad_mask: at.Bool[torch.Tensor, "action_horizon"]
@@ -84,7 +93,11 @@ class PiPolicy(nn.Module):
         img_masks: at.Bool[torch.Tensor, "b n_cam 1"],
         lang_tokens: at.Int64[torch.Tensor, "b l"],
         lang_masks: at.Bool[torch.Tensor, "b l"],
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
         """Embed images with SigLIP and language tokens with embedding layer to prepare
         for PaliGemma transformer processing.
         """
@@ -118,7 +131,9 @@ class PiPolicy(nn.Module):
         )
 
         torch.cuda.nvtx.range_push("language_embedding")
-        lang_emb = self._apply_checkpoint(self.paligemma.language_model.embed_tokens, lang_tokens)
+        lang_emb = self._apply_checkpoint(
+            self.paligemma.language_model.embed_tokens, lang_tokens
+        )
         torch.cuda.nvtx.range_pop()
 
         embs.append(lang_emb)
@@ -139,7 +154,7 @@ class PiPolicy(nn.Module):
         state: at.Float[torch.Tensor, "*batch_size state_history state_dim"],
         noisy_actions: at.Float[torch.Tensor, "*batch_size action_horizon action_dim"],
         time: at.Float[torch.Tensor, "*batch_size"],
-    ) -> tuple[
+    ) -> Tuple[
         at.Float[torch.Tensor, "*batch_size action_horizon hidden_dim"],
         at.Bool[torch.Tensor, "*batch_size action_horizon"],
         at.Bool[torch.Tensor, "*batch_size action_horizon"],
@@ -158,8 +173,11 @@ class PiPolicy(nn.Module):
         time_emb = self._apply_checkpoint(self.time_mlp.forward, time_emb)
 
         action_emb = self._apply_checkpoint(self.action_in_proj.forward, noisy_actions)
-        state_emb = self._apply_checkpoint(self.state_in_proj.forward, state)
-        suffix_emb = torch.cat([action_emb, state_emb], dim=1)
+        if self.config.use_state:
+            state_emb = self._apply_checkpoint(self.state_in_proj.forward, state)
+            suffix_emb = torch.cat([state_emb, action_emb], dim=1)
+        else:
+            suffix_emb = action_emb
 
         bsize = action_emb.shape[0]
         pad_mask = einops.repeat(
@@ -188,6 +206,9 @@ class PiPolicy(nn.Module):
         prefix_att_2d_mask = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_att_mask = attention_fill_false_to_inf(prefix_att_2d_mask)[:, None, :, :]
         # shape: [batch_size, 1, prefix_len, prefix_len]
+
+        hidden_size = prefix_embs.shape[-1]
+        hidden_states = prefix_embs * math.sqrt(hidden_size)
         torch.cuda.nvtx.range_pop()
 
         from transformers.models.gemma.modeling_gemma import (
@@ -208,14 +229,17 @@ class PiPolicy(nn.Module):
             pre_att = layer.input_layernorm(hidden_states)
             torch.cuda.nvtx.range_pop()
 
-            input_shape = hidden_states.shape[:-1]
+            input_shape = hidden_states.shape[:-1]  # [batch_size, seq_len]
             head_shape = (*input_shape, -1, layer.self_attn.head_dim)
 
             # attention
             torch.cuda.nvtx.range_push(f"project_qkv")
-            q = layer.self_attn.q_proj(pre_att).view(head_shape).transpose(1, 2)
-            k = layer.self_attn.k_proj(pre_att).view(head_shape).transpose(1, 2)
-            v = layer.self_attn.v_proj(pre_att).view(head_shape).transpose(1, 2)
+            q = layer.self_attn.q_proj(pre_att).view(head_shape)  # .transpose(1, 2)
+            k = layer.self_attn.k_proj(pre_att).view(head_shape)  # .transpose(1, 2)
+            v = layer.self_attn.v_proj(pre_att).view(head_shape)  # .transpose(1, 2)
+            q = einops.rearrange(q, "b seq head dim -> b head seq dim")
+            k = einops.rearrange(k, "b seq head dim -> b head seq dim")
+            v = einops.rearrange(v, "b seq head dim -> b head seq dim")
             torch.cuda.nvtx.range_pop()
 
             torch.cuda.nvtx.range_push(f"rotary_embedding")
@@ -231,9 +255,9 @@ class PiPolicy(nn.Module):
                 attn_mask=prefix_att_mask,
                 scale=layer.self_attn.scaling,
             )
-            out_att = out_att.transpose(1, 2).reshape(*input_shape, -1).contiguous()
-            # print(out_att)
-            # breakpoint()
+            out_att = einops.rearrange(
+                out_att, "b head seq dim -> b seq (head dim)"
+            ).contiguous()
             out_att = layer.self_attn.o_proj(out_att)
             res_att = hidden_states + out_att
             torch.cuda.nvtx.range_pop()
@@ -244,9 +268,6 @@ class PiPolicy(nn.Module):
             res_mlp = res_att + out_mlp
             torch.cuda.nvtx.range_pop()
             return res_mlp, (k_rotate, v)
-
-        hidden_size = prefix_embs.shape[-1]
-        hidden_states = prefix_embs * math.sqrt(hidden_size)
 
         kv_cache_list: List[KVCache] = []
         for i, layer in enumerate(model.layers):
@@ -298,7 +319,7 @@ class PiPolicy(nn.Module):
             attention_mask=full_att_mask,
             past_key_values=prefix_key_values,
         )
-        suffix_out = suffix_out[:, :self.config.action_horizon, :]
+        suffix_out = suffix_out[:, -self.config.action_horizon :, :]
         return self.action_out_proj(suffix_out)
 
     @torch.inference_mode()
