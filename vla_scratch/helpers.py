@@ -240,7 +240,7 @@ def aggregate_tensordict(td: TensorDict, world_size: int) -> TensorDict:
         dim=0,
     ).squeeze(-1)
 
-    dist.all_reduce(vec, op=dist.ReduceOp.SUM)
+    dist.all_reduce(vec, op=dist.ReduceOp.AVG)
 
     agg_values = vec.detach().cpu().tolist()
     return {k: float(agg_values[i]) for i, k in enumerate(keys_sorted)}

@@ -1,6 +1,7 @@
 import torch
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
+from omegaconf import OmegaConf, DictConfig
 
 from torch.distributed.checkpoint.state_dict import (
     get_state_dict,
@@ -11,34 +12,65 @@ from torch.distributed.checkpoint.state_dict import (
 
 
 def find_latest_checkpoint(path: Path | str, desired_iter: Optional[int] = None) -> Optional[Path]:
-    """Return a concrete checkpoint file path from a file or directory.
+    """Resolve a checkpoint path to a concrete checkpoint location.
 
-    - If `path` is a file, returns it.
-    - If `path` is a directory, find the newest `checkpoint_*.pth` (or the one
-      matching `desired_iter` if provided).
-    - If no candidate is found or path missing, returns None.
+    Supports both legacy single-file checkpoints (checkpoint_*.pth) and the
+    new directory style (checkpoint_*/model.pt, optimizer.pt).
+
+    Returns:
+    - If `path` is a file, returns it (legacy compatible).
+    - If `path` is a checkpoint directory (contains model.pt), returns the dir.
+    - If `path` is a run directory, returns the newest checkpoint directory
+      if available, otherwise the newest legacy .pth file.
+    - None if nothing is found.
     """
     p = Path(path)
     if p.is_file():
+        # If this is model.pt inside a checkpoint dir, prefer returning the dir
+        if p.name == "model.pt" and p.parent.name.startswith("checkpoint_"):
+            return p.parent
         return p
     if not p.exists():
         return None
-    candidates = sorted(p.glob("checkpoint_*.pth"))
-    if not candidates:
+
+    # If the path itself looks like a checkpoint directory
+    if p.is_dir() and (p / "model.pt").exists():
+        return p
+
+    # Gather new-style checkpoint directories under this directory
+    def _epoch_num_from_name(name: str) -> int:
+        try:
+            return int(name.split("_")[-1])
+        except Exception:
+            return -1
+
+    dir_candidates = [d for d in p.glob("checkpoint_*") if d.is_dir() and (d / "model.pt").exists()]
+    if dir_candidates:
+        def _score(d: Path) -> int:
+            ep = _epoch_num_from_name(d.name)
+            if desired_iter is not None and ep == desired_iter:
+                return 10**9
+            return ep
+        dir_candidates.sort(key=_score)
+        return dir_candidates[-1]
+
+    # Fallback: legacy single-file checkpoints
+    file_candidates = sorted(p.glob("checkpoint_*.pth"))
+    if not file_candidates:
         return None
 
-    def _epoch_num(cp: Path) -> int:
+    def _score_file(cp: Path) -> int:
         stem = cp.stem  # checkpoint_X
         try:
             epoch = int(stem.split("_")[-1])
-            # If a specific iter is desired, bubble it to the end
             if desired_iter is not None and epoch == desired_iter:
                 return 10**9
             return epoch
         except Exception:
             return -1
 
-    return sorted(candidates, key=_epoch_num)[-1]
+    file_candidates.sort(key=_score_file)
+    return file_candidates[-1]
 
 
 def load_model_from_checkpoint(
@@ -48,47 +80,94 @@ def load_model_from_checkpoint(
     *,
     strict: bool = False,
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
-    """Load a checkpoint into `model`.
+    """Load a checkpoint into `model` supporting both dir and file formats.
 
-    Expects either a raw state_dict or a dict with key "model".
-    Returns (missing_keys, unexpected_keys) from load_state_dict.
+    - New format: `path` is a checkpoint directory containing `model.pt` saved
+      as a full model state_dict (from FSDP get_state_dict or plain).
+    - Legacy: `path` is a single file containing either a raw state_dict or a
+      dict with key "model".
+    Returns (missing_keys, unexpected_keys).
     """
-    ckpt = torch.load(path, map_location=device)
-    model_state: Dict[str, Any]
+    p = Path(path)
+    if p.is_dir():
+        p = p / "model.pt"
+    ckpt = torch.load(p, map_location=device)
     if isinstance(ckpt, dict) and "model" in ckpt:
         model_state = ckpt["model"]
     else:
-        model_state = ckpt  # assume raw state dict
+        model_state = ckpt
     missing, unexpected = model.load_state_dict(model_state, strict=strict)
     return tuple(missing), tuple(unexpected)
 
 
 def load_checkpoint(
     model: torch.nn.Module,
-    checkpoint: str,
+    checkpoint: str | Path,
     global_rank: int,
     optimizer: Optional[torch.optim.Optimizer] = None,
-) -> None:
-    # Only rank 0 reads from disk; others pass empty dict and receive via broadcast
+) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Distributed-aware checkpoint load supporting dir and file formats.
+
+    - New format: `checkpoint` is a directory with `model.pt` and `optimizer.pt`.
+    - Legacy: `checkpoint` is a single .pth file with keys {"model","optimizer"}
+      or a raw model state_dict.
+    Returns (missing_keys, unexpected_keys) from set_model_state_dict.
+    """
+    p = Path(checkpoint)
+    # Only rank 0 reads from disk; others pass empty dicts and receive via broadcast
     if global_rank == 0:
-        state_dict = torch.load(
-            checkpoint,
-            map_location="cpu",
-            mmap=True,
-            weights_only=False,
-        )
-        model_sd = state_dict.get("model", {})
-        optim_sd = state_dict.get("optimizer", {})
+        model_sd: Dict[str, Any] = {}
+        optim_sd: Dict[str, Any] = {}
+        if p.is_dir():
+            mp = p / "model.pt"
+            op = p / "optimizer.pt"
+            if mp.exists():
+                model_sd = torch.load(mp, map_location="cpu")
+            if optimizer is not None and op.exists():
+                optim_sd = torch.load(op, map_location="cpu")
+        else:
+            # Legacy single-file checkpoint
+            state = torch.load(p, map_location="cpu", mmap=True, weights_only=False)
+            if isinstance(state, dict):
+                model_sd = state.get("model", state)
+                if optimizer is not None:
+                    optim_sd = state.get("optimizer", {})
+            else:
+                model_sd = state
     else:
         model_sd = {}
         optim_sd = {}
 
     options = StateDictOptions(full_state_dict=True, broadcast_from_rank0=True)
-    # set_model_state_dict is collective-aware and will synchronize as needed
-    missing, unexpected = set_model_state_dict(model=model, model_state_dict=model_sd, options=options)
+    missing, unexpected = set_model_state_dict(
+        model=model,
+        model_state_dict=model_sd,
+        options=options,
+    )
 
-    # Always call optimizer load on all ranks to keep collectives in sync
     if optimizer is not None:
+        # If the optimizer state dict uses FQNs in param_groups, make sure
+        # every referenced FQN has an entry in the state map to avoid KeyErrors
+        # during torch.distributed.checkpoint restore.
+        if global_rank == 0:
+            groups = optim_sd["param_groups"]
+            state = optim_sd.get("state", {})
+            # Detect FQN-style groups
+            uses_fqn = False
+            if isinstance(groups, list) and groups:
+                first_params = groups[0].get("params", []) if isinstance(groups[0], dict) else []
+                if first_params and isinstance(first_params[0], str):
+                    uses_fqn = True
+            if uses_fqn and isinstance(state, dict):
+                for g in groups:
+                    params = g.get("params", []) if isinstance(g, dict) else []
+                    for fqn in params:
+                        if fqn not in state:
+                            state[fqn] = {}
+        # Load optimizer state in a best-effort manner. Checkpoints created
+        # before adding new params (e.g., 'obs_registers') may not contain
+        # optimizer slots for newly introduced parameters. In that case, fall
+        # back to skipping optimizer load instead of raising.
         set_optimizer_state_dict(
             model=model,
             optimizers=optimizer,
@@ -102,8 +181,13 @@ def save_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
     global_rank: int,
-    filename: str,
+    filename: str | Path,
 ):
+    """Save checkpoint as a directory with model.pt and optimizer.pt.
+
+    `filename` should be the checkpoint directory name, e.g.,
+    `checkpoint_5`. If a file extension is provided, it will be stripped.
+    """
     options = StateDictOptions(full_state_dict=True, cpu_offload=True)
     model_state_dict, optim_state_dict = get_state_dict(
         model,
@@ -112,11 +196,81 @@ def save_checkpoint(
     )
 
     if global_rank == 0:
-        full_state_dict = {
-            "model": model_state_dict,
-            "optimizer": optim_state_dict,
-        }
-        torch.save(full_state_dict, filename)
-        print(f"Saved checkpoint to {filename}")
+        base = Path(filename)
+        # Strip extension if provided (for backward compatibility)
+        if base.suffix:
+            base = base.with_suffix("")
+        base.mkdir(parents=True, exist_ok=True)
+        model_file = base / "model.pt"
+        optim_file = base / "optimizer.pt"
+        torch.save(model_state_dict, model_file)
+        torch.save(optim_state_dict, optim_file)
+        print(f"Saved checkpoint to {base} (model.pt, optimizer.pt)")
 
 
+def load_and_merge_cfg_from_checkpoint(
+    cfg: DictConfig,
+    checkpoint_path: Optional[Path | str],
+    *,
+    policy_key: str = "policy",
+    data_key: str = "data",
+) -> DictConfig:
+    """Merge saved YAML configs from a checkpoint's run directory into `cfg`.
+
+    Behavior:
+    - Resolves `checkpoint_path` to a concrete file (supports directory).
+    - Looks for `policy-cfg.yaml` and `data-cfg.yaml` next to the checkpoint.
+    - Falls back to `train-cfg.yaml` if dedicated files are missing.
+    - Merges as: merged = OmegaConf.merge(loaded_yaml, current_cfg_section), so
+      current CLI/Hydra overrides in `cfg` take precedence over saved values.
+
+    Returns the mutated `cfg` (same object) for convenience.
+    """
+    if checkpoint_path is None:
+        return cfg
+    try:
+        ckpt = find_latest_checkpoint(checkpoint_path)
+    except Exception:
+        ckpt = None
+    if ckpt is None:
+        return cfg
+
+    run_dir = Path(ckpt).parent
+    pol_yml = run_dir / "policy-cfg.yaml"
+    dat_yml = run_dir / "data-cfg.yaml"
+    trn_yml = run_dir / "train-cfg.yaml"
+
+    loaded_policy = None
+    loaded_data = None
+    try:
+        if pol_yml.exists():
+            loaded_policy = OmegaConf.load(pol_yml)
+    except Exception:
+        loaded_policy = None
+    try:
+        if dat_yml.exists():
+            loaded_data = OmegaConf.load(dat_yml)
+    except Exception:
+        loaded_data = None
+
+    if (loaded_policy is None or loaded_data is None) and trn_yml.exists():
+        try:
+            trn_cfg = OmegaConf.load(trn_yml)
+            if loaded_policy is None and isinstance(trn_cfg, DictConfig):
+                loaded_policy = trn_cfg.get(policy_key)
+            if loaded_data is None and isinstance(trn_cfg, DictConfig):
+                loaded_data = trn_cfg.get(data_key)
+        except Exception:
+            pass
+
+    if loaded_policy is not None and policy_key in cfg:
+        cfg[policy_key] = OmegaConf.merge(loaded_policy, cfg[policy_key])
+    elif loaded_policy is not None:
+        cfg[policy_key] = loaded_policy
+
+    if loaded_data is not None and data_key in cfg:
+        cfg[data_key] = OmegaConf.merge(loaded_data, cfg[data_key])
+    elif loaded_data is not None:
+        cfg[data_key] = loaded_data
+
+    return cfg

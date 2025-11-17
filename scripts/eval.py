@@ -25,7 +25,11 @@ from vla_scratch.datasets.config import DataConfig
 from vla_scratch.helpers import create_dataset
 from vla_scratch.policies.config import create_policy, PolicyConfig
 from vla_scratch.transforms.data_types import DataSample
-from vla_scratch.utils.checkpoint import find_latest_checkpoint, load_model_from_checkpoint
+from vla_scratch.utils.checkpoint import (
+    find_latest_checkpoint,
+    load_model_from_checkpoint,
+    load_and_merge_cfg_from_checkpoint,
+)
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -76,6 +80,10 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
 
+    # Merge saved YAML configs (policy/data) from checkpoint's run dir if provided
+    cfg = load_and_merge_cfg_from_checkpoint(cfg, cfg.get("checkpoint_path"))
+
+    # Convert to typed objects after merge
     eval_cfg = cast(EvalConfig, OmegaConf.to_object(cfg))
 
     # Data + policy configs
