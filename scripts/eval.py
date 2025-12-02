@@ -22,14 +22,14 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 
 from vla_scratch.datasets.config import DataConfig
-from vla_scratch.helpers import create_dataset
+from vla_scratch.helpers.data import create_dataset
 from vla_scratch.policies.config import create_policy, PolicyConfig
 from vla_scratch.transforms.data_types import DataSample
 from vla_scratch.utils.checkpoint import (
     find_latest_checkpoint,
     load_model_from_checkpoint,
-    load_and_merge_cfg_from_checkpoint,
 )
+from vla_scratch.utils.config import merge_cfg_from_checkpoint
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -49,7 +49,6 @@ class EvalConfig:
     num_steps: int = 10
     # Runtime
     checkpoint_path: Optional[str] = None
-    device: str = "cuda"
 
 
 cs = ConfigStore.instance()
@@ -81,7 +80,7 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.set_struct(cfg, False)
 
     # Merge saved YAML configs (policy/data) from checkpoint's run dir if provided
-    cfg = load_and_merge_cfg_from_checkpoint(cfg, cfg.get("checkpoint_path"))
+    cfg = merge_cfg_from_checkpoint(cfg, cfg.get("checkpoint_path"))
 
     # Convert to typed objects after merge
     eval_cfg = cast(EvalConfig, OmegaConf.to_object(cfg))
@@ -95,8 +94,8 @@ def main(cfg: DictConfig) -> None:
 
     # Disable image augmentation for eval if SpiritImages present
     for i, spec in enumerate(list(data_cfg.input_transforms or [])):
-        if isinstance(spec, dict) and spec.get("_target_") == "vla_scratch.datasets.spirit.transforms.SpiritImages":
-            spec.update({"enable_aug": False, "aug_p": 0.0})
+        if isinstance(spec, dict) and "enable_aug" in spec:
+            spec.update({"enable_aug": False})
             data_cfg.input_transforms[i] = spec
 
     # Create transformed dataset (includes normalization + policy transforms + ToTensorClass)
@@ -108,9 +107,10 @@ def main(cfg: DictConfig) -> None:
     policy_cfg.action_dim = int(sample0.action_chunk.actions.shape[-1])
 
     # Model
-    device = torch.device(eval_cfg.device if eval_cfg.device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu"))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     with torch.device(device):
         model = create_policy(policy_cfg)
+
     if eval_cfg.checkpoint_path is not None:
         ckpt = find_latest_checkpoint(eval_cfg.checkpoint_path)
         if ckpt is None:

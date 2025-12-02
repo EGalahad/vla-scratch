@@ -17,6 +17,8 @@ Examples:
 
 from dataclasses import dataclass, field
 from typing import Any
+from tqdm import tqdm
+
 
 import hydra
 from hydra.core.config_store import ConfigStore
@@ -27,17 +29,16 @@ from torch.utils.data import DataLoader, Subset
 import numpy as np
 
 from vla_scratch.datasets.config import DataConfig
+from vla_scratch.helpers.data import create_dataset
 from vla_scratch.policies.config import PolicyConfig
 
 from vla_scratch.transforms.data_keys import PROCESSED_ACTION_KEY, PROCESSED_STATE_KEY
+from vla_scratch.transforms.data_types import DataSample
 from vla_scratch.transforms.normalization import (
     save_norm_stats,
     NormStats,
     FieldNormStats,
 )
-from vla_scratch.policies.config import PolicyConfig
-from vla_scratch.helpers import create_dataset
-
 
 @dataclass
 class NormStatsConfig:
@@ -49,8 +50,8 @@ class NormStatsConfig:
 
     # Compute controls
     num_samples: int = 4096
-    batch_size: int = 64
-    num_workers: int = 16
+    batch_size: int = 32
+    num_workers: int = 32
     pin_memory: bool = False
 
 
@@ -61,15 +62,16 @@ cs.store(name="norm_stats", node=NormStatsConfig())
 def compute_and_save_norm_stats(
     data_config: DataConfig,
     policy_config: PolicyConfig,
-    num_samples: int = 4096,
-    batch_size: int = 64,
-    num_workers: int = 16,
-    pin_memory: bool = False,
+    num_samples: int,
+    batch_size: int,
+    num_workers: int,
+    pin_memory: bool,
 ) -> NormStats:
-    dataset = create_dataset(data_config, policy_config, skip_norm_stats=True)
+    dataset = create_dataset(data_config, policy_config, skip_norm_stats=True, skip_policy_transforms=True)
     dataset_size = len(dataset)
 
-    dummy = dataset[0]
+    if data_config.norm_stats_path is None:
+        raise ValueError("DataConfig.norm_stats_path must be set to save stats.")
 
     num_samples = min(num_samples, dataset_size)
     batch_size = min(batch_size, num_samples)
@@ -90,13 +92,9 @@ def compute_and_save_norm_stats(
     )
 
     batches = []
-
-    from tqdm import tqdm
-
     for batch, _ in tqdm(dataloader, desc="Computing norm stats"):
         batches.append(batch)
-
-    stacked = torch.cat(batches)
+    stacked: DataSample = torch.cat(batches)
     state_tensor = stacked.observation.state
     action_tensor = stacked.action_chunk.actions
 
@@ -113,9 +111,6 @@ def compute_and_save_norm_stats(
         PROCESSED_STATE_KEY: _compute_norm_stats_for_tensor(state_tensor),
         PROCESSED_ACTION_KEY: _compute_norm_stats_for_tensor(action_tensor),
     }
-
-    if data_config.norm_stats_path is None:
-        raise ValueError("DataConfig.norm_stats_path must be set to save stats.")
 
     stats_path = save_norm_stats(data_config, policy_config, stats)
     print(f"Saved normalization stats to: {stats_path}")

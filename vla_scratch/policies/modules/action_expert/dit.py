@@ -1,19 +1,17 @@
-import math
 from dataclasses import dataclass
 from typing import List, Tuple, Callable
 import einops
 
 import torch
-import torch.utils.checkpoint
 from torch import nn
 from torch.nn import functional as F
 from torch.nn import RMSNorm
 
 from transformers.activations import ACT2FN
 
-from vla_scratch.policies.data_types import *
-from vla_scratch.policies.utils import apply_rotary_pos_emb
-
+from vla_scratch.policies.utils.data_types import *
+from vla_scratch.policies.utils.transformers import apply_rotary_pos_emb
+from vla_scratch.policies.utils.training import apply_checkpoint_when_training
 
 
 @torch.compile
@@ -92,6 +90,8 @@ class DiTConfig:
     num_key_value_heads: int
     head_dim: int
 
+    attn_dropout: float = 0.0
+    mlp_dropout: float = 0.0
     mlp_activation: str = "silu"
 
     num_hidden_layers: int = 12
@@ -179,11 +179,6 @@ class Attention(nn.Module):
             k_rotate = torch.cat([past_k, k_rotate], dim=-2)
             v = torch.cat([past_v, v], dim=-2)
 
-        # import torch.distributed as dist
-        # if dist.get_rank() == 0:
-        #     breakpoint()
-        # dist.barrier()
-
         attn_output = F.scaled_dot_product_attention(
             q_rotate,
             k_rotate,
@@ -193,13 +188,18 @@ class Attention(nn.Module):
             scale=self.scaling,
             enable_gqa=True,
         )
-        attn_output = attn_output.transpose(1, 2).reshape(batch, seq_len, -1).contiguous()
-        return self.o_proj(attn_output), k_rotate, v
+        attn_output = einops.rearrange(
+            attn_output, "b h seq_q d -> b seq_q (h d)"
+        ).contiguous()
+        return self.o_proj(attn_output), (k_rotate, v)
 
 
 class DecoderBlock(nn.Module):
     def __init__(self, config: DiTConfig, layer_idx: int):
         super().__init__()
+        self.attn_dropout = config.attn_dropout
+        self.mlp_dropout = config.mlp_dropout
+
         cond_dim = config.hidden_size
         self.ada_mod1 = AdaptiveModulation(cond_dim, config.hidden_size)
         self.input_layernorm = RMSNorm(
@@ -237,27 +237,34 @@ class DecoderBlock(nn.Module):
 
         torch.cuda.nvtx.range_push(f"attention")
         pre_att = modulate(self.input_layernorm(hidden_states), shift_msa, scale_msa)
-        out_att, k, v = self.attn.forward(
+        out_att, (k, v) = self.attn.forward(
             pre_att,
             position_embeddings=position_embeddings,
             attention_mask=attention_mask,
             kv_cache=kv_cache,
         )
-        res_att = hidden_states + out_att * gate_msa.unsqueeze(1)
+        if self.attn_dropout > 0.0:
+            out_att = torch.dropout(out_att, p=self.attn_dropout, train=self.training)
+        res_att = hidden_states + einops.einsum(
+            out_att, gate_msa, "b s d, b d -> b s d"
+        )
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push(f"mlp")
         pre_mlp = modulate(self.post_attention_layernorm(res_att), shift_mlp, scale_mlp)
         out_mlp = self.mlp(pre_mlp)
-        res_mlp = res_att + out_mlp * gate_mlp.unsqueeze(1)
+        if self.mlp_dropout > 0.0:
+            out_mlp = torch.dropout(out_mlp, p=self.mlp_dropout, train=self.training)
+        res_mlp = res_att + einops.einsum(out_mlp, gate_mlp, "b s d, b d -> b s d")
         torch.cuda.nvtx.range_pop()
-        return res_mlp, k, v
+        return res_mlp, (k, v)
 
 
 class DiTModel(nn.Module):
     def __init__(self, config: DiTConfig):
         super().__init__()
         self.config = config
+        self.use_dropout = config.attn_dropout > 0.0 or config.mlp_dropout > 0.0
         self.blocks: List[DecoderBlock] = nn.ModuleList(
             [DecoderBlock(config, idx) for idx in range(config.num_hidden_layers)]
         )
@@ -302,9 +309,10 @@ class DiTModel(nn.Module):
         attention_mask: AttentionMask | None = None,
         past_key_values: List[KVCache] | None = None,
         # num_kv = num_q + len(past_key_values)
-    ) -> Tuple[HiddenState, List[KVCache]] | Tuple[
-        HiddenState, List[KVCache], torch.Tensor | None
-    ]:
+    ) -> (
+        Tuple[HiddenState, List[KVCache]]
+        | Tuple[HiddenState, List[KVCache], torch.Tensor | None]
+    ):
         # We currently ignore past_key_values as caching is not implemented.
         if inputs_embeds is None:
             raise ValueError("inputs_embeds must be provided.")
@@ -326,27 +334,18 @@ class DiTModel(nn.Module):
             torch.cuda.nvtx.range_push(f"layer_{i}")
             if i in self.config.layers_for_dispersive_loss:
                 hidden_states_for_dispersive_loss.append(hidden_states)
-            if self.training:
-                hidden_states, k, v = torch.utils.checkpoint.checkpoint(
-                    layer,
-                    hidden_states,
-                    (cos, sin),
-                    adarms_cond,
-                    attention_mask=attention_mask,
-                    kv_cache=kv_cache,
-                    use_reentrant=False,
-                    preserve_rng_state=False,
-                )
-            else:
-                hidden_states, k, v = layer(
-                    hidden_states,
-                    position_embeddings=(cos, sin),
-                    adarms_cond=adarms_cond,
-                    attention_mask=attention_mask,
-                    kv_cache=kv_cache,
-                )
+            hidden_states, (k, v) = apply_checkpoint_when_training(
+                self,
+                layer,
+                hidden_states,
+                (cos, sin),
+                adarms_cond,
+                attention_mask=attention_mask,
+                kv_cache=kv_cache,
+                preserve_rng_state=self.use_dropout,
+            )
             torch.cuda.nvtx.range_pop()
-            
+
             kv_cache_list.append((k, v))
 
         hidden_states = self.norm(hidden_states)
@@ -369,5 +368,7 @@ class DiTModel(nn.Module):
         z_cast = z.type(torch.float32)
         diff = nn.functional.pdist(z_cast).pow(2) / z.shape[1]
         diff = diff.type(z.dtype)
-        diff = torch.concat((diff, diff, torch.zeros(z.shape[0]).cuda()))
+        diff = torch.concat(
+            (diff, diff, torch.zeros(z.shape[0], device=z.device, dtype=z.dtype))
+        )
         return torch.log(torch.exp(-diff / tau).mean())

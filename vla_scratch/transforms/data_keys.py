@@ -9,5 +9,3 @@ PROCESSED_IMAGE_KEY = "observation.images"
 PROCESSED_IMAGE_MASK_KEY = "observation.image_masks"
 
 TASK_KEY = "task"
-TOKENIZED_KEY = "observation.tokenized_prompt"
-TOKENIZED_MASK_KEY = "observation.tokenized_prompt_mask"

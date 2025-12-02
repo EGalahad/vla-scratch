@@ -1,6 +1,7 @@
 import torch
 import numpy as np
-from typing import Dict, Mapping, TYPE_CHECKING
+from typing import Dict, Mapping, TYPE_CHECKING, List, Tuple, Optional
+from tensordict import TensorClass
 
 from vla_scratch.utils.math import scale_transform, unscale_transform
 from vla_scratch.utils.config import resolve_config_placeholders
@@ -11,14 +12,11 @@ if TYPE_CHECKING:
     from vla_scratch.policies.config import PolicyConfig
 
 
-class FieldNormStats(torch.nn.Module):
-    def __init__(self, mean_, std_, q01, q99):
-        super().__init__()
-        self.mean_ = torch.as_tensor(mean_, dtype=torch.float32)
-        self.std_ = torch.as_tensor(std_, dtype=torch.float32)
-        self.q01 = torch.as_tensor(q01, dtype=torch.float32)
-        self.q99 = torch.as_tensor(q99, dtype=torch.float32)
-
+class FieldNormStats(TensorClass):
+    mean_: torch.Tensor
+    std_: torch.Tensor
+    q01: torch.Tensor
+    q99: torch.Tensor
 
 NormStats = Dict[str, FieldNormStats]
 
@@ -79,12 +77,22 @@ class Normalize(torch.nn.Module):
         *,
         use_quantiles: bool = True,
         strict: bool = False,
+        noise_cfg: Optional[Mapping[str, Mapping[str, Dict[str, float]]]] = None,
+        enable_aug: bool = False,
     ) -> None:
         super().__init__()
         self.norm_stats = norm_stats
         self.use_quantiles = use_quantiles
         self.strict = strict
         self._fn = self._normalize_quantile if use_quantiles else self._normalize
+        self._noise_cfg = self._prepare_noise_cfg(noise_cfg)
+        self.enable_aug = enable_aug
+        if self._noise_cfg:
+            missing_norm_keys = [k for k in self._noise_cfg if k not in self.norm_stats]
+            if missing_norm_keys:
+                raise KeyError(
+                    f"Noise requested for keys without normalization stats: {missing_norm_keys}"
+                )
 
     def compute(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         for key, stats in self.norm_stats.items():
@@ -92,7 +100,11 @@ class Normalize(torch.nn.Module):
                 if self.strict:
                     raise KeyError(f"Missing key '{key}' for normalization")
                 continue
-            sample[key] = self._fn(sample[key], stats)
+            normalized = self._fn(sample[key], stats)
+            if self.enable_aug:
+                sample[key] = self._apply_noise(key, normalized)
+            else:
+                sample[key] = normalized
         return sample
 
     @staticmethod
@@ -105,6 +117,55 @@ class Normalize(torch.nn.Module):
     ) -> torch.Tensor:
         return scale_transform(tensor, stats.q01, stats.q99).clamp(-1.5, 1.5)
 
+    @staticmethod
+    def _parse_range(range_key: str) -> Tuple[int, int]:
+        try:
+            start_str, end_str = range_key.split("-")
+            start, end = int(start_str), int(end_str)
+        except Exception as exc:  # noqa: PERF203
+            raise ValueError(
+                f"Noise range '{range_key}' must be formatted as 'start-end'"
+            ) from exc
+        if end <= start:
+            raise ValueError(f"Noise range '{range_key}' must satisfy end > start")
+        return start, end
+
+    @staticmethod
+    def _prepare_noise_cfg(
+        noise_cfg: Optional[Mapping[str, Mapping[str, Dict[str, float]]]]
+    ) -> Dict[str, List[Tuple[slice, Dict[str, float]]]]:
+        if noise_cfg is None:
+            return {}
+
+        prepared: Dict[str, List[Tuple[slice, Dict[str, float]]]] = {}
+        for target_key, ranges in noise_cfg.items():
+            if not isinstance(ranges, Mapping):
+                raise TypeError("Noise config entries must be mappings of ranges to cfgs")
+
+            parsed_ranges: List[Tuple[slice, Dict[str, float]]] = []
+            for range_key, cfg in ranges.items():
+                start, end = Normalize._parse_range(range_key)
+                parsed_ranges.append((slice(start, end), cfg))
+
+            if parsed_ranges:
+                prepared[target_key] = parsed_ranges
+        return prepared
+
+    def _apply_noise(self, key: str, tensor: torch.Tensor) -> torch.Tensor:
+        noise_specs = self._noise_cfg.get(key)
+        if not noise_specs:
+            return tensor
+
+        noisy = tensor.clone()
+        for span, cfg in noise_specs:
+            noise_type = cfg.get("type")
+            if noise_type == "gaussian":
+                std = cfg.get("std")
+                noise = torch.randn_like(noisy[..., span]).clamp_(-3, 3) * float(std)
+                noisy[..., span] = noisy[..., span] + noise
+            else:
+                raise ValueError(f"Unsupported noise type '{noise_type}' for key '{key}'")
+        return noisy
 
 class DeNormalize(torch.nn.Module):
     def __init__(

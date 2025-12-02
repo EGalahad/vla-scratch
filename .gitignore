@@ -1,5 +1,8 @@
 tests
 /datasets
+mjcf
+/outputs
+*.log
 
 *.egg-info
 __pycache__

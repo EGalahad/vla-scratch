@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 name = "vla-scratch"
 version = "0.1.0"
 description = "Utilities for working with VLA Scratch datasets and policies."
-requires-python = ">=3.10"
+requires-python = "==3.10.*"
 dependencies = [
     "torch",
     "torchvision==0.22.0",
@@ -33,18 +33,16 @@ dependencies = [
     "msgpack",
     "pdbpp",
     "datasets",
-    "jsonlines>=4.0.0",
-    "matplotlib>=3.9.4",
+    "jsonlines",
+    "matplotlib",
+    # the last commit before dataset version 3.0
     "lerobot @ git+https://github.com/huggingface/lerobot@d602e8169cbad9e93a4a3b3ee1dd8b332af7ebf8",
-    "torchcodec>=0.5",
-    "accelerate>=1.11.0",
-    "mujoco>=3.3.7",
-    "viser>=1.0.15",
+    "torchcodec",
+    "accelerate",
+    "mujoco",
+    "viser",
+    # "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp310-cp310-linux_x86_64.whl",
 ]
-
-[tool.uv.sources]
-lerobot = { git = "https://github.com/huggingface/lerobot", rev = "d602e8169cbad9e93a4a3b3ee1dd8b332af7ebf8" }
-# lerobot = { path = "../lerobot" }
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -22,18 +22,12 @@ class ToDataSample(TransformFn):
             state=sample[PROCESSED_STATE_KEY],
             task=sample[TASK_KEY],
         )
-        action = ActionChunk(actions=sample[PROCESSED_ACTION_KEY])
+        if (actions := sample.get(PROCESSED_ACTION_KEY)) is not None:
+            action = ActionChunk(actions=actions)
+        else:
+            action = None
         return DataSample(observation=observation, action_chunk=action)
 
-
-class ToObservation(TransformFn):
-    def compute(self, sample: Dict[str, Any]) -> Observation:  # type: ignore[override]
-        return Observation(
-            images=sample[PROCESSED_IMAGE_KEY],
-            image_masks=sample[PROCESSED_IMAGE_MASK_KEY],
-            state=sample[PROCESSED_STATE_KEY],
-            task=sample[TASK_KEY],
-        )
 
 
 class ToTorch(TransformFn):

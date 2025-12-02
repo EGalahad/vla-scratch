@@ -1,7 +1,6 @@
 import torch
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
-from omegaconf import OmegaConf, DictConfig
 
 from torch.distributed.checkpoint.state_dict import (
     get_state_dict,
@@ -122,9 +121,9 @@ def load_checkpoint(
             mp = p / "model.pt"
             op = p / "optimizer.pt"
             if mp.exists():
-                model_sd = torch.load(mp, map_location="cpu")
+                model_sd = torch.load(mp, map_location="cpu", mmap=True, weights_only=False)
             if optimizer is not None and op.exists():
-                optim_sd = torch.load(op, map_location="cpu")
+                optim_sd = torch.load(op, map_location="cpu", mmap=True, weights_only=False)
         else:
             # Legacy single-file checkpoint
             state = torch.load(p, map_location="cpu", mmap=True, weights_only=False)
@@ -207,70 +206,3 @@ def save_checkpoint(
         torch.save(optim_state_dict, optim_file)
         print(f"Saved checkpoint to {base} (model.pt, optimizer.pt)")
 
-
-def load_and_merge_cfg_from_checkpoint(
-    cfg: DictConfig,
-    checkpoint_path: Optional[Path | str],
-    *,
-    policy_key: str = "policy",
-    data_key: str = "data",
-) -> DictConfig:
-    """Merge saved YAML configs from a checkpoint's run directory into `cfg`.
-
-    Behavior:
-    - Resolves `checkpoint_path` to a concrete file (supports directory).
-    - Looks for `policy-cfg.yaml` and `data-cfg.yaml` next to the checkpoint.
-    - Falls back to `train-cfg.yaml` if dedicated files are missing.
-    - Merges as: merged = OmegaConf.merge(loaded_yaml, current_cfg_section), so
-      current CLI/Hydra overrides in `cfg` take precedence over saved values.
-
-    Returns the mutated `cfg` (same object) for convenience.
-    """
-    if checkpoint_path is None:
-        return cfg
-    try:
-        ckpt = find_latest_checkpoint(checkpoint_path)
-    except Exception:
-        ckpt = None
-    if ckpt is None:
-        return cfg
-
-    run_dir = Path(ckpt).parent
-    pol_yml = run_dir / "policy-cfg.yaml"
-    dat_yml = run_dir / "data-cfg.yaml"
-    trn_yml = run_dir / "train-cfg.yaml"
-
-    loaded_policy = None
-    loaded_data = None
-    try:
-        if pol_yml.exists():
-            loaded_policy = OmegaConf.load(pol_yml)
-    except Exception:
-        loaded_policy = None
-    try:
-        if dat_yml.exists():
-            loaded_data = OmegaConf.load(dat_yml)
-    except Exception:
-        loaded_data = None
-
-    if (loaded_policy is None or loaded_data is None) and trn_yml.exists():
-        try:
-            trn_cfg = OmegaConf.load(trn_yml)
-            if loaded_policy is None and isinstance(trn_cfg, DictConfig):
-                loaded_policy = trn_cfg.get(policy_key)
-            if loaded_data is None and isinstance(trn_cfg, DictConfig):
-                loaded_data = trn_cfg.get(data_key)
-        except Exception:
-            pass
-
-    if loaded_policy is not None and policy_key in cfg:
-        cfg[policy_key] = OmegaConf.merge(loaded_policy, cfg[policy_key])
-    elif loaded_policy is not None:
-        cfg[policy_key] = loaded_policy
-
-    if loaded_data is not None and data_key in cfg:
-        cfg[data_key] = OmegaConf.merge(loaded_data, cfg[data_key])
-    elif loaded_data is not None:
-        cfg[data_key] = loaded_data
-
-    return cfg

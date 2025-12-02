@@ -1,6 +1,6 @@
 import torch
 import jaxtyping as at
-from tensordict import TensorClass
+from tensordict import TensorClass, TensorDict
 
 
 # In the future, tokenized prompt will also include multi-task instructions and their answers.
@@ -11,9 +11,10 @@ class Observation(TensorClass):
     images: at.Float[torch.Tensor, "*batch num_cam 3 height width"]
     image_masks: at.Bool[torch.Tensor, "*batch num_cam 1"]
     state: at.Float[torch.Tensor, "*batch state_history state_dim"]
+    task: str
     # tokenized_prompt: at.Int64[torch.Tensor, "*batch max_tokens"]
     # tokenized_prompt_mask: at.Bool[torch.Tensor, "*batch max_tokens"]
-    task: str
+    policy_input: TensorDict = None  # Dynamic field for policy-specific inputs
 
 
 class ActionChunk(TensorClass):
@@ -22,4 +23,4 @@ class ActionChunk(TensorClass):
 
 class DataSample(TensorClass):
     observation: Observation
-    action_chunk: ActionChunk
+    action_chunk: ActionChunk = None
