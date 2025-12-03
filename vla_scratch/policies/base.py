@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Tuple, TYPE_CHECKING
+from typing import List, Tuple, TYPE_CHECKING, Optional
 
 import torch
 import torch.nn as nn
@@ -18,11 +18,19 @@ if TYPE_CHECKING:
 class BasePolicy(nn.Module, ABC):
     """Minimal policy interface required by training/eval/serving scripts."""
 
+    def initialize_weights(self):
+        pass
+    
     @abstractmethod
     def encode_prefix(
         self,
         observation: "Observation",
-    ) -> Tuple["HiddenState", "PrefixPadMask", List["KVCache"]]:
+    ) -> Tuple[
+        "HiddenState",
+        "PrefixPadMask",
+        List["KVCache"],
+        Optional[List[torch.Tensor]],
+    ]:
         """Encode the observation prefix and return KV cache artifacts."""
 
     @abstractmethod
@@ -31,6 +39,7 @@ class BasePolicy(nn.Module, ABC):
         state: torch.Tensor,
         prefix_pad_masks: "PrefixPadMask",
         prefix_key_values: List["KVCache"],
+        encoder_hidden_states: Optional[List[torch.Tensor]],
         noisy_actions: torch.Tensor,
         time: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:

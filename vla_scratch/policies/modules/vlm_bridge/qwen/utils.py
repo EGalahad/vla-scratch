@@ -319,10 +319,11 @@ REPLACED = False
 
 def replace_qwen3vl_forward():
     global REPLACED
-    Qwen3VLTextDecoderLayer.forward = _qwen_text_decoder_layer_custom_forward
-    Qwen3VLVisionModel.forward = _qwen3_vision_model_fast_forward
-    Qwen3VLVisionAttention.forward = _qwen3_vision_attn_fast_forward
-    REPLACED = True
+    if not REPLACED:
+        Qwen3VLTextDecoderLayer.forward = _qwen_text_decoder_layer_custom_forward
+        Qwen3VLVisionModel.forward = _qwen3_vision_model_fast_forward
+        Qwen3VLVisionAttention.forward = _qwen3_vision_attn_fast_forward
+        REPLACED = True
 
 
 def restore_qwen3vl_forward():

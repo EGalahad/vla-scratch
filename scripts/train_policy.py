@@ -172,7 +172,7 @@ def main(cfg: DictConfig) -> None:
     ), "eval-interval must be multiple of log-interval"
 
     local_rank, global_rank, world_size, mesh = setup_dist()
-    device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    device = torch.device(type="cuda", index=local_rank)
 
     print_with_rank("create dataloaders...")
     (
@@ -181,13 +181,43 @@ def main(cfg: DictConfig) -> None:
         subtrain_dataloader,
     ) = create_dataloaders(train_cfg, world_size, global_rank, add_noise=True)
 
-    dummy_data: "DataSample" = next(iter(dataloader))[0]
+    dummy_data: "DataSample" = next(iter(dataloader))[0][0:1].to(device)
     train_cfg.policy.action_dim = dummy_data.action_chunk.actions.shape[-1]
     train_cfg.policy.state_dim = dummy_data.observation.state.shape[-1]
 
     print_with_rank("create model...")
     with torch.device(device):
         model: BasePolicy = train_cfg.policy.instantiate()
+
+    time_dist = get_beta_dist(1.0, 1.5, device=device)
+    # Warmup pass
+    print_with_rank("warmup pass...")
+    # TODO: wrap this into the policy class
+    (
+        _,
+        prefix_pad_masks,
+        prefix_key_values,
+        encoder_hidden_states,
+    ) = model.encode_prefix(dummy_data.observation)
+    actions = dummy_data.action_chunk.actions
+    timestep = sample_time(time_dist, dummy_data.shape)
+    v_t, disp_loss = model.predict_suffix(
+        state=dummy_data.observation.state,
+        prefix_pad_masks=prefix_pad_masks,
+        prefix_key_values=prefix_key_values,
+        encoder_hidden_states=encoder_hidden_states,
+        noisy_actions=actions,
+        time=timestep,
+    )
+    flow_mse = F.mse_loss(actions, v_t, reduction="none").mean()
+    loss = flow_mse + train_cfg.disp_loss_weight * disp_loss
+    loss.backward()
+    
+    # make all parameters to bfloat16
+    for param in model.parameters():
+        param.data = param.data.type(torch.bfloat16)
+
+    model.initialize_weights()
 
     if world_size > 1:
         model.apply_fsdp(
@@ -248,9 +278,8 @@ def main(cfg: DictConfig) -> None:
         run_idx = run.name.split("-")[-1]
         run.name = f"{run_idx}-{default_run_name}"
 
-        save_train_config(cfg, run_dir)
+        save_train_config(train_cfg, run_dir)
 
-    time_dist = get_beta_dist(1.0, 1.5, device=device)
 
     global_step = 0
     scheduler = None
@@ -301,7 +330,12 @@ def main(cfg: DictConfig) -> None:
                 torch.cuda.nvtx.range_pop()
 
                 torch.cuda.nvtx.range_push("Model Encode Prefix")
-                _, prefix_pad_masks, prefix_key_values = model.encode_prefix(
+                (
+                    _,
+                    prefix_pad_masks,
+                    prefix_key_values,
+                    encoder_hidden_states,
+                ) = model.encode_prefix(
                     observation=data_sample.observation,
                 )
                 torch.cuda.nvtx.range_pop()
@@ -327,6 +361,10 @@ def main(cfg: DictConfig) -> None:
                     )
                     for k, v in prefix_key_values
                 ]
+                encoder_hidden_states = [
+                    expand_tensor(h, train_cfg.num_noise_per_sample)
+                    for h in encoder_hidden_states
+                ]
                 torch.cuda.nvtx.range_pop()
 
                 if train_cfg.detach_kv_cache:
@@ -334,6 +372,7 @@ def main(cfg: DictConfig) -> None:
                     prefix_key_values = [
                         (k.detach(), v.detach()) for k, v in prefix_key_values
                     ]
+                    encoder_hidden_states = [h.detach() for h in encoder_hidden_states]
                     torch.cuda.nvtx.range_pop()
 
                 torch.cuda.nvtx.range_push("Apply Noise")
@@ -348,6 +387,7 @@ def main(cfg: DictConfig) -> None:
                     state=data_sample.observation.state,
                     prefix_pad_masks=prefix_pad_masks,
                     prefix_key_values=prefix_key_values,
+                    encoder_hidden_states=encoder_hidden_states,
                     noisy_actions=noisy_actions,
                     time=timestep,
                 )

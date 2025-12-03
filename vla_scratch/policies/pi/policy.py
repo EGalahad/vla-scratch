@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import List, Tuple, TYPE_CHECKING
+from typing import List, Tuple, TYPE_CHECKING, Optional
 
 import einops
 import jaxtyping as at
@@ -15,6 +15,7 @@ from torch.distributed.fsdp._fully_shard import (
 
 from vla_scratch.policies.base import BasePolicy
 from vla_scratch.policies.modules.action_expert.dit import DiTModel
+from vla_scratch.policies.modules.action_expert.cross_attention_dit import DiTModel as CrossAttentionDiTModel
 from vla_scratch.policies.modules.vlm_bridge.paligemma.bridge import PaligemmaBridge
 from vla_scratch.policies.modules.vlm_bridge.qwen.bridge import Qwen3VLBridge
 from vla_scratch.policies.utils.training import (
@@ -109,7 +110,10 @@ class PiPolicy(BasePolicy):
             action_expert_config.num_key_value_heads = text_num_kv_heads
 
         start_time = time.time()
-        self.action_expert = DiTModel(config=action_expert_config)
+        if not config.interleave_cross_attention:
+            self.action_expert = DiTModel(config=action_expert_config)
+        else:
+            self.action_expert = CrossAttentionDiTModel(config=action_expert_config)
         end_time = time.time()
         self.action_expert_layers = action_expert_config.num_hidden_layers
         print(f"Action expert initialized in {end_time - start_time:.2f} seconds.")
@@ -136,10 +140,26 @@ class PiPolicy(BasePolicy):
         suffix_att_mask[0] = 1
         # create a new attention block for the suffix, prefix should not attend to suffix
 
+        if config.suffix_add_pos_emb:
+            self.position_embedding = nn.Parameter(
+                torch.zeros(suffix_len, action_expert_config.hidden_size)
+            )
+
         self.register_buffer("suffix_pad_mask", suffix_pad_mask, persistent=False)
         self.register_buffer("suffix_att_mask", suffix_att_mask, persistent=False)
         self.suffix_pad_mask: at.Bool[torch.Tensor, "action_horizon"]
         self.suffix_att_mask: at.Bool[torch.Tensor, "action_horizon"]
+
+    def initialize_weights(self):
+        nn.init.xavier_uniform_(self.state_in_proj.weight)
+        nn.init.zeros_(self.state_in_proj.bias)
+        nn.init.xavier_uniform_(self.action_in_proj.weight)
+        nn.init.zeros_(self.action_in_proj.bias)
+        nn.init.xavier_uniform_(self.action_out_proj.weight)
+        nn.init.zeros_(self.action_out_proj.bias)
+        if self.config.suffix_add_pos_emb:
+            nn.init.normal_(self.position_embedding, mean=0.0, std=0.02)
+        self.action_expert.initialize_weights()
 
     def apply_fsdp(self, param_type, reduce_type, output_dtype, mesh):
         """Helper function to apply FSDP to a module with given mixed precision policy."""
@@ -166,7 +186,12 @@ class PiPolicy(BasePolicy):
 
     def encode_prefix(
         self, observation: "Observation"
-    ) -> Tuple["HiddenState", "PrefixPadMask", List["KVCache"]]:
+    ) -> Tuple[
+        "HiddenState",
+        "PrefixPadMask",
+        List["KVCache"],
+        List[torch.Tensor],
+    ]:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
         # Prepare extra observation register tokens if configured
         extra_embs = None
@@ -179,13 +204,18 @@ class PiPolicy(BasePolicy):
             extra_att = self.obs_registers_att_masks
 
         # Bridge handles model-specific preprocessing + transformer forward
-        hidden_states, prefix_pad_masks, kv_cache_list = self.vlm_bridge.encode_prefix(
+        (
+            hidden_states,
+            prefix_pad_masks,
+            kv_cache_list,
+            encoder_hidden_states,
+        ) = self.vlm_bridge.encode_prefix(
             observation=observation,
             extra_embs=extra_embs,
             extra_pad_masks=extra_pad,
             extra_att_masks=extra_att,
         )
-        return hidden_states, prefix_pad_masks, kv_cache_list
+        return hidden_states, prefix_pad_masks, kv_cache_list, encoder_hidden_states
 
     def embed_suffix(
         self,
@@ -218,6 +248,9 @@ class PiPolicy(BasePolicy):
             suffix_emb = torch.cat([state_emb, action_emb], dim=1)
         else:
             suffix_emb = action_emb
+        
+        if self.config.suffix_add_pos_emb:
+            suffix_emb.add_(self.position_embedding.unsqueeze(0))
 
         bsize = action_emb.shape[0]
         pad_mask = einops.repeat(
@@ -234,6 +267,7 @@ class PiPolicy(BasePolicy):
         state,
         prefix_pad_masks,
         prefix_key_values: List["KVCache"],
+        encoder_hidden_states: Optional[List[torch.Tensor]],
         noisy_actions,
         time,
     ):
@@ -246,14 +280,15 @@ class PiPolicy(BasePolicy):
 
         torch.cuda.nvtx.range_push("attention_mask")
         suffix_len = suffix_pad_masks.shape[1]
-        prefix_pad_mask = einops.repeat(prefix_pad_masks, "b p -> b s p", s=suffix_len)
         suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
+        prefix_pad_mask = einops.repeat(prefix_pad_masks, "b p -> b s p", s=suffix_len)
         full_att_2d_mask = torch.cat([prefix_pad_mask, suffix_att_2d_masks], dim=2)
         full_att_mask = einops.rearrange(full_att_2d_mask, "b i j -> b 1 i j")
         # shape: [batch_size, 1, suffix_len, prefix_len + suffix_len]
         torch.cuda.nvtx.range_pop()
 
         prefix_key_values = prefix_key_values[-self.action_expert_layers :]
+        encoder_hidden_states = encoder_hidden_states[-self.action_expert_layers :]
         # only use the last num_obs_registers tokens from the prefix for the expert
         if self.config.expert_only_use_register:
             torch.cuda.nvtx.range_push("select_obs_registers")
@@ -264,6 +299,9 @@ class PiPolicy(BasePolicy):
                     kv[1][..., -num_registers:, :],
                 )
                 for kv in prefix_key_values
+            ]
+            encoder_hidden_states = [
+                h[:, -num_registers:, :] for h in encoder_hidden_states
             ]
             full_att_mask = full_att_mask[..., -(num_registers + suffix_len) :]
             torch.cuda.nvtx.range_pop()
@@ -279,7 +317,20 @@ class PiPolicy(BasePolicy):
             adarms_cond=adarms_cond,
             attention_mask=full_att_mask,
             past_key_values=prefix_key_values,
+            encoder_hidden_states=encoder_hidden_states,
         )
+        breakpoint()
+        # self.action_expert.forward(inputs_embeds=suffix_embs, position_ids=position_ids, adarms_cond=adarms_cond, attention_mask=full_att_mask, past_key_values=prefix_key_values, encoder_hidden_states=encoder_hidden_states)[0]
+
+        # perm_encoder = torch.randperm(encoder_hidden_states[0].shape[1])
+        # self.action_expert.forward(inputs_embeds=suffix_embs, position_ids=position_ids, adarms_cond=adarms_cond, attention_mask=full_att_mask, past_key_values=prefix_key_values, encoder_hidden_states=[h[:, perm_encoder] for h in encoder_hidden_states])[0]
+
+        # perm = torch.randperm(suffix_embs.shape[1])
+        # inv = torch.empty_like(perm)
+        # inv[perm] = torch.arange(perm.numel(), device=perm.device)
+        # self.action_expert.forward(inputs_embeds=suffix_embs[:, perm], position_ids=position_ids, adarms_cond=adarms_cond, attention_mask=full_att_mask, past_key_values=prefix_key_values, encoder_hidden_states=encoder_hidden_states)[0][:, inv]
+        
+
         suffix_out = suffix_out[:, -self.config.action_horizon :, :]
         return self.action_out_proj(suffix_out), disp_loss
 
@@ -288,7 +339,12 @@ class PiPolicy(BasePolicy):
         self, observation: "Observation", num_steps=10
     ) -> at.Float[torch.Tensor, "*batch_size chunk_size action_dim"]:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
-        _, prefix_pad_masks, prefix_key_values = self.encode_prefix(observation)
+        (
+            _,
+            prefix_pad_masks,
+            prefix_key_values,
+            encoder_hidden_states,
+        ) = self.encode_prefix(observation)
 
         bsize = observation.shape[0]
         device = observation.device
@@ -308,6 +364,7 @@ class PiPolicy(BasePolicy):
                 observation.state,
                 prefix_pad_masks,
                 prefix_key_values,
+                encoder_hidden_states,
                 x_t,
                 time.expand(bsize),
             )

@@ -10,10 +10,26 @@ from torch.nn import RMSNorm
 from transformers.activations import ACT2FN
 
 from vla_scratch.policies.utils.data_types import *
-from vla_scratch.policies.utils.transformers import apply_rotary_pos_emb
+# from vla_scratch.policies.utils.transformers import apply_rotary_pos_emb
 from vla_scratch.policies.utils.training import apply_checkpoint_when_training
 
+from torch.nn.modules.lazy import LazyModuleMixin
 
+class LazyRMSNorm(LazyModuleMixin, torch.nn.Module):
+    def __init__(self, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.normalized_shape = None
+
+    def initialize_parameters(self, input):
+        self.normalized_shape = tuple(input.shape[-1:])
+
+    def forward(self, x):
+        if self.normalized_shape is None:
+            self.initialize_parameters(x)
+
+        return torch.rms_norm(x, self.normalized_shape, eps=self.eps)
+    
 @torch.compile
 def modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
@@ -121,18 +137,15 @@ class Attention(nn.Module):
         # TODO: not sure if we need dropout here
         # self.attention_dropout = config.attention_dropout
 
-        self.q_proj = nn.Linear(
-            config.hidden_size,
+        self.q_proj = nn.LazyLinear(
             self.num_att_heads * self.head_dim,
             bias=config.attention_bias,
         )
-        self.k_proj = nn.Linear(
-            config.hidden_size,
+        self.k_proj = nn.LazyLinear(
             self.num_kv_heads * self.head_dim,
             bias=config.attention_bias,
         )
-        self.v_proj = nn.Linear(
-            config.hidden_size,
+        self.v_proj = nn.LazyLinear(
             self.num_kv_heads * self.head_dim,
             bias=config.attention_bias,
         )
@@ -145,23 +158,23 @@ class Attention(nn.Module):
     def forward(
         self,
         hidden_states: HiddenState,
-        position_embeddings: PositionEmbs,
         *,
         attention_mask: AttentionMask | None = None,
-        kv_cache: KVCache | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
     ) -> torch.Tensor:
         q = self.q_proj(hidden_states)
         q = einops.rearrange(
             q, "b n_q (h d) -> b h n_q d", h=self.num_att_heads, d=self.head_dim
         )
-        k = self.k_proj(hidden_states)
+        kv_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
+        k = self.k_proj(kv_hidden_states)
         k = einops.rearrange(
             k,
             "b n_kv (h_kv d) -> b h_kv n_kv d",
             h_kv=self.num_kv_heads,
             d=self.head_dim,
         )
-        v = self.v_proj(hidden_states)
+        v = self.v_proj(kv_hidden_states)
         v = einops.rearrange(
             v,
             "b n_kv (h_kv d) -> b h_kv n_kv d",
@@ -171,18 +184,13 @@ class Attention(nn.Module):
         # shape: q: (batch, num_heads, seq, head_dim)
         # shape: k, v: (batch, num_kv_heads, seq, head_dim)
 
-        cos, sin = position_embeddings
-        q_rotate, k_rotate = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
-        if kv_cache is not None:
-            past_k, past_v = kv_cache
-            k_rotate = torch.cat([past_k, k_rotate], dim=-2)
-            v = torch.cat([past_v, v], dim=-2)
-        
+        q_rotate, k_rotate = q, k
+
         attn_output = F.scaled_dot_product_attention(
             q_rotate,
             k_rotate,
             v,
-            attn_mask=attention_mask,
+            # attn_mask=attention_mask,
             dropout_p=0.0,
             scale=self.scaling,
             enable_gqa=True,
@@ -206,6 +214,7 @@ class DecoderBlock(nn.Module):
             eps=config.rms_norm_eps,
             elementwise_affine=False,
         )
+        self.encoder_layernorm = LazyRMSNorm(eps=config.rms_norm_eps)
         self.attn = Attention(config, layer_idx)
 
         self.ada_mod2 = AdaptiveModulation(cond_dim, config.hidden_size)
@@ -223,11 +232,10 @@ class DecoderBlock(nn.Module):
     def forward(
         self,
         hidden_states: HiddenState,
-        position_embeddings: PositionEmbs,
         adarms_cond: AdarmsCond,
         *,
         attention_mask: AttentionMask | None = None,
-        kv_cache: KVCache | None = None,
+        encoder_hidden_states: torch.Tensor | None = None,
     ) -> torch.Tensor:
         torch.cuda.nvtx.range_push(f"adarms")
         shift_msa, scale_msa, gate_msa = self.ada_mod1(adarms_cond)
@@ -236,11 +244,12 @@ class DecoderBlock(nn.Module):
 
         torch.cuda.nvtx.range_push(f"attention")
         pre_att = modulate(self.input_layernorm(hidden_states), shift_msa, scale_msa)
+        if encoder_hidden_states is not None:
+            encoder_hidden_states = self.encoder_layernorm(encoder_hidden_states)
         out_att, (k, v) = self.attn.forward(
             pre_att,
-            position_embeddings=position_embeddings,
             attention_mask=attention_mask,
-            kv_cache=kv_cache,
+            encoder_hidden_states=encoder_hidden_states,
         )
         if self.attn_dropout > 0.0:
             out_att = torch.dropout(out_att, p=self.attn_dropout, train=self.training)
@@ -264,9 +273,14 @@ class DiTModel(nn.Module):
         super().__init__()
         self.config = config
         self.use_dropout = config.attn_dropout > 0.0 or config.mlp_dropout > 0.0
-        self.blocks: List[DecoderBlock] = nn.ModuleList(
-            [DecoderBlock(config, idx) for idx in range(config.num_hidden_layers)]
-        )
+        blocks: List[DecoderBlock] = []
+        # = nn.ModuleList(
+        #     [DecoderBlock(config, idx) for idx in range(config.num_hidden_layers)]
+        # )
+        for idx in range(config.num_hidden_layers):
+            blocks.append(DecoderBlock(config, idx * 2))
+            blocks.append(DecoderBlock(config, idx * 2 + 1))
+        self.blocks = nn.ModuleList(blocks)
 
         self.norm = RMSNorm(
             normalized_shape=config.hidden_size,
@@ -278,8 +292,6 @@ class DiTModel(nn.Module):
             max_position_embeddings=config.max_position_embeddings,
             base=config.rope_theta,
         )
-
-        self.initialize_weights()
 
     def initialize_weights(self):
         # Initialize transformer layers:
@@ -307,7 +319,7 @@ class DiTModel(nn.Module):
         *,
         attention_mask: AttentionMask | None = None,
         past_key_values: List[KVCache] | None = None,
-        encoder_hidden_states: List[torch.Tensor] | None = None,  # unused placeholder
+        encoder_hidden_states: List[torch.Tensor] | None = None,
         # num_kv = num_q + len(past_key_values)
     ) -> (
         Tuple[HiddenState, List[KVCache]]
@@ -316,8 +328,6 @@ class DiTModel(nn.Module):
         # We currently ignore past_key_values as caching is not implemented.
         if inputs_embeds is None:
             raise ValueError("inputs_embeds must be provided.")
-
-        cos, sin = self.rotary_emb(position_ids, dtype=inputs_embeds.dtype)
 
         if attention_mask is not None and attention_mask.dim() != 4:
             raise ValueError(
@@ -328,10 +338,12 @@ class DiTModel(nn.Module):
         kv_cache_list: List[KVCache] = []
         hidden_states_for_dispersive_loss = []
         for i, layer in enumerate(self.blocks):
-            if past_key_values is not None:
-                kv_cache = past_key_values[i]
+            if i % 2 == 1:
+                # cross-attention
+                encoder_hidden_states_this_layer = encoder_hidden_states[i // 2]
             else:
-                kv_cache = None
+                # self-attention
+                encoder_hidden_states_this_layer = None
             torch.cuda.nvtx.range_push(f"layer_{i}")
             if i in self.config.layers_for_dispersive_loss:
                 hidden_states_for_dispersive_loss.append(hidden_states)
@@ -339,10 +351,9 @@ class DiTModel(nn.Module):
                 self,
                 layer,
                 hidden_states,
-                (cos, sin),
                 adarms_cond,
                 attention_mask=attention_mask,
-                kv_cache=kv_cache,
+                encoder_hidden_states=encoder_hidden_states_this_layer,
                 preserve_rng_state=self.use_dropout,
             )
             torch.cuda.nvtx.range_pop()

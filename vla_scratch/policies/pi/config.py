@@ -12,6 +12,8 @@ class PiConfig(PolicyConfig):
     max_prompt_length: int
 
     action_expert_cfg: DiTConfig
+    interleave_cross_attention: bool = False
+    suffix_add_pos_emb: bool = False
 
     use_state: bool = True
 

@@ -14,7 +14,7 @@ from vla_scratch.policies.utils.training import (
 from vla_scratch.policies.modules.vlm_bridge.base import VLMBridge
 from vla_scratch.policies.modules.vlm_bridge.qwen.processor import QwenPolicyInput
 from vla_scratch.policies.modules.vlm_bridge.qwen.utils import (
-    REPLACED,
+    is_qwen3vl_forward_replaced,
     replace_qwen3vl_forward,
 )
 from vla_scratch.policies.utils.transformers import make_att_2d_masks
@@ -68,9 +68,15 @@ class Qwen3VLBridge(VLMBridge):
         extra_embs: Optional[torch.Tensor] = None,
         extra_pad_masks: Optional[torch.Tensor] = None,
         extra_att_masks: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        List[Tuple[torch.Tensor, torch.Tensor]],
+        List[torch.Tensor],
+    ]:
         device = observation.device
         bsz = observation.shape[0]
+        REPLACED = is_qwen3vl_forward_replaced()
 
         assert isinstance(observation.policy_input, QwenPolicyInput)
         policy_td = observation.policy_input
@@ -156,6 +162,7 @@ class Qwen3VLBridge(VLMBridge):
         hidden_states = embs
 
         kv_cache_list: List[Tuple[torch.Tensor, torch.Tensor]] = []
+        encoder_hidden_states_list: List[torch.Tensor] = []
         if not REPLACED:
             from transformers.models.qwen3_vl.modeling_qwen3_vl import DynamicCache
 
@@ -188,6 +195,8 @@ class Qwen3VLBridge(VLMBridge):
             kv_cache_list.append((k, v))
             torch.cuda.nvtx.range_pop()
 
+            encoder_hidden_states_list.append(hidden_states)
+
             if deepstack_image_embeds is not None and layer_idx in range(
                 len(deepstack_image_embeds)
             ):
@@ -197,4 +206,4 @@ class Qwen3VLBridge(VLMBridge):
 
         hidden_states = lm.norm(hidden_states)
 
-        return hidden_states, prefix_pad_masks, kv_cache_list
+        return hidden_states, prefix_pad_masks, kv_cache_list, encoder_hidden_states_list

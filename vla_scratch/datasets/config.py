@@ -1,8 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
+from typing import Any, List, Optional
 
 from vla_scratch.utils.config import locate_class
 
@@ -10,7 +8,7 @@ from vla_scratch.utils.config import locate_class
 @dataclass
 class DataConfig:
     _target_: str
-    root_path: Optional["Path"] = None
+    root_path: Optional[Path] = None
     action_horizon: Optional[int] = None
     state_history: Optional[int] = None
     # Structured transform lists

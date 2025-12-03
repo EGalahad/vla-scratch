@@ -64,7 +64,12 @@ class PaligemmaBridge(VLMBridge):
         extra_embs: Optional[torch.Tensor] = None,
         extra_pad_masks: Optional[torch.Tensor] = None,
         extra_att_masks: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        List[Tuple[torch.Tensor, torch.Tensor]],
+        Optional[List[torch.Tensor]],
+    ]:
         policy_input = observation.policy_input
         if not isinstance(policy_input, PaligemmaPolicyInput):
             raise TypeError("Observation policy_input must be PaligemmaPolicyInput")
@@ -124,7 +129,7 @@ class PaligemmaBridge(VLMBridge):
             torch.cuda.nvtx.range_push(f"layer_{i}")
             hidden_states, (k, v) = apply_checkpoint_when_training(
                 self,
-                getattr(layer, self.layer_custom_forward_name),
+                layer,
                 hidden_states,
                 prefix_att_mask,
                 pos_emb,
@@ -133,4 +138,4 @@ class PaligemmaBridge(VLMBridge):
             torch.cuda.nvtx.range_pop()
 
         hidden_states = lm.norm(hidden_states)
-        return hidden_states, prefix_pad_masks, kv_cache_list
+        return hidden_states, prefix_pad_masks, kv_cache_list, None

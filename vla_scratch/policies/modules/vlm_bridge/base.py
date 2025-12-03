@@ -34,7 +34,12 @@ class VLMBridge(nn.Module):
         extra_embs: Optional[torch.Tensor] = None,
         extra_pad_masks: Optional[torch.Tensor] = None,
         extra_att_masks: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
+    ) -> Tuple[
+        torch.Tensor,
+        torch.Tensor,
+        List[Tuple[torch.Tensor, torch.Tensor]],
+        Optional[List[torch.Tensor]],
+    ]:
         raise NotImplementedError
 
     def apply_fsdp(self, mp_policy, mesh):
