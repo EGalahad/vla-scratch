@@ -14,9 +14,9 @@ class PiConfig(PolicyConfig):
         hidden_size=1024,
         intermediate_size=4096,
         # attention size
-        num_attention_heads=32,
-        num_key_value_heads=32,
-        head_dim=128,
+        num_attention_heads=8,
+        num_key_value_heads=8,
+        head_dim=512,
         # layers
         num_hidden_layers=12,
         cross_attention_every=2,
@@ -46,19 +46,38 @@ default_pi_config = PiConfig(
             "_target_": "vla_scratch.policies.modules.vlm_bridge.paligemma.processor.PaligemmaProcessor",
             "processor_class": "PaliGemmaProcessor",
             "model_id": "google/paligemma-3b-mix-224",
-            "max_length": 64,
+            "max_length": 32,
             "target_size": (224, 224),
         }
     ],
 )
 
-Cs = ConfigStore.instance()
-Cs.store(
-    name="pi",
+pi_paligemma2_config = replace(
+    default_pi_config,
+    model_id="google/paligemma2-3b-mix-224",
+    transforms=[
+        {
+            "_target_": "vla_scratch.policies.modules.vlm_bridge.paligemma.processor.PaligemmaProcessor",
+            "processor_class": "PaliGemmaProcessor",
+            "model_id": "google/paligemma2-3b-mix-224",
+            "max_length": 32,
+            "target_size": (224, 224),
+        }
+    ],
+)
+
+cs = ConfigStore.instance()
+cs.store(
+    name="pi-paligemma",
     node=default_pi_config,
     group="policy",
 )
-Cs.store(
+cs.store(
+    name="pi-paligemma2",
+    node=pi_paligemma2_config,
+    group="policy",
+)
+cs.store(
     name="pi-qwen",
     node=replace(
         default_pi_config,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, Optional, Tuple, TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -31,12 +31,12 @@ class VLMBridge(nn.Module):
 
     def encode(
         self,
-        *,
         observation: "Observation",
+        *,
         extra_embs: Optional[torch.Tensor] = None,
         extra_pad_masks: Optional[torch.Tensor] = None,
         extra_att_masks: Optional[torch.Tensor] = None,
-    ) -> VLMOutputs:
+    ) -> Tuple[VLMOutputs, Dict]:
         raise NotImplementedError
 
     def apply_fsdp(self, mp_policy, mesh):

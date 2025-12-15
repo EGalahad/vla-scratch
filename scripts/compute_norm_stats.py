@@ -127,10 +127,8 @@ def main(cfg: DictConfig) -> None:
     policy_cfg: PolicyConfig = run_cfg.policy
 
     # Keep temporal params aligned if one is overridden
-    if data_cfg.action_horizon is None:
-        data_cfg.action_horizon = policy_cfg.action_horizon
-    if data_cfg.state_history is None:
-        data_cfg.state_history = policy_cfg.state_history
+    data_cfg.action_horizon = policy_cfg.action_horizon
+    data_cfg.state_history = policy_cfg.state_history
 
     print(
         f"Computing norm stats for data={data_cfg._target_} policy={policy_cfg._target_} "

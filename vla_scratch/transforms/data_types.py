@@ -8,7 +8,7 @@ from tensordict import TensorClass, TensorDict
 
 
 class Observation(TensorClass):
-    images: at.Float[torch.Tensor, "*batch num_cam 3 height width"]
+    images: at.UInt8[torch.Tensor, "*batch num_cam 3 height width"]
     image_masks: at.Bool[torch.Tensor, "*batch num_cam 1"]
     state: at.Float[torch.Tensor, "*batch state_history state_dim"]
     task: str

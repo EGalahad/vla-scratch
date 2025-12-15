@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 from copy import copy
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import List, Optional, Tuple, TYPE_CHECKING, Dict
 
 import einops
 import torch
@@ -49,6 +49,10 @@ class Qwen3VLBridge(VLMBridge):
         self.max_length = max_length
         replace_qwen3vl_forward()
 
+        from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionModel
+        visual: Qwen3VLVisionModel = self.causal_model.model.visual
+        visual.prepared_freq_table = visual.rotary_pos_emb(64)
+
     def apply_fsdp(self, mp_policy, mesh):
         fully_shard_layers(self.causal_model.model.visual.blocks, mesh, mp_policy)
         fully_shard_layers(
@@ -64,8 +68,8 @@ class Qwen3VLBridge(VLMBridge):
 
     def encode(
         self,
-        *,
         observation: "Observation",
+        *,
         extra_embs: Optional[torch.Tensor] = None,
         extra_pad_masks: Optional[torch.Tensor] = None,
         extra_att_masks: Optional[torch.Tensor] = None,
@@ -188,9 +192,9 @@ class Qwen3VLBridge(VLMBridge):
                 hidden_states = outputs
                 layer = past_key_values_this_layer.layers.pop(-1)
                 k, v = layer.keys, layer.values
-            kv_cache_list.append((k, v))
             torch.cuda.nvtx.range_pop()
 
+            kv_cache_list.append((k, v))
             encoder_hidden_states_list.append(hidden_states)
 
             if deepstack_image_embeds is not None and layer_idx in range(

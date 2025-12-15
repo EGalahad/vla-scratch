@@ -22,7 +22,8 @@ def _qwen3vl_fast_rot_pos_emb(
 ) -> torch.Tensor:
     """GPU-friendly rotary position builder without .item()/.tolist() syncs."""
     torch.cuda.nvtx.range_push("custom-rot_pos_emb")
-    freq_table = self.rotary_pos_emb(32)
+    # freq_table = self.rotary_pos_emb(32)
+    freq_table = self.prepared_freq_table
 
     merge_size = self.spatial_merge_size
     t, h, w = grid_thw_list[0]
@@ -340,8 +341,6 @@ orig_vision_forward = Qwen3VLVisionModel.forward
 orig_attn_forward = Qwen3VLVisionAttention.forward
 orig_layer_forward = Qwen3VLTextDecoderLayer.forward
 orig_rotary_forward = Qwen3VLTextRotaryEmbedding.forward
-
-
 REPLACED = False
 
 

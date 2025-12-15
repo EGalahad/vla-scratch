@@ -21,6 +21,9 @@ from vla_scratch.policies.utils.transformers import make_att_2d_masks
 from vla_scratch.policies.modules.vlm_bridge.data_types import VLMOutputs
 
 if TYPE_CHECKING:
+    from transformers.models.paligemma.modeling_paligemma import (
+        PaliGemmaForConditionalGeneration,
+    )
     from transformers.models.gemma.modeling_gemma import GemmaModel
     from vla_scratch.transforms.data_types import Observation
 
@@ -36,16 +39,25 @@ class PaligemmaBridge(VLMBridge):
         except AttributeError as e:
             raise ImportError(f"transformers has no class named '{vlm_type}'.") from e
 
-        self.causal_model = vlm_cls.from_pretrained(
-            model_id, trust_remote_code=True, device_map=torch.cuda.current_device()
+        self.causal_model: "PaliGemmaForConditionalGeneration" = (
+            vlm_cls.from_pretrained(
+                model_id,
+                attn_implementation="sdpa",
+                trust_remote_code=True,
+                device_map=torch.cuda.current_device(),
+            )
         )
 
         PaliGemmaProcessor = getattr(tfm, "PaliGemmaProcessor")
         self.processor = PaliGemmaProcessor.from_pretrained(model_id)
         self.tokenizer = self.processor.tokenizer
 
+        replace_paligemma_forward()
+
     def apply_fsdp(self, mp_policy, mesh):
-        # TODO: add fsdp to vision encoder
+        fully_shard_layers(
+            self.causal_model.vision_tower.vision_model.encoder.layers, mesh, mp_policy
+        )
         fully_shard_layers(self.causal_model.language_model.layers, mesh, mp_policy)
 
     def get_text_dims(self) -> Tuple[int, int, int]:
@@ -57,28 +69,28 @@ class PaligemmaBridge(VLMBridge):
             cfg.hidden_size,
         )
 
-    @replace_paligemma_forward()
     def encode(
         self,
-        *,
         observation: "Observation",
+        *,
         extra_embs: Optional[torch.Tensor] = None,
         extra_pad_masks: Optional[torch.Tensor] = None,
         extra_att_masks: Optional[torch.Tensor] = None,
     ) -> Tuple[VLMOutputs, Dict]:
-        policy_input = observation.policy_input
-        if not isinstance(policy_input, PaligemmaPolicyInput):
+        policy_td = observation.policy_input
+        if not isinstance(policy_td, PaligemmaPolicyInput):
             raise TypeError("Observation policy_input must be PaligemmaPolicyInput")
-        images = policy_input.images
+        pixel_values = policy_td.pixel_values
         image_masks = observation.image_masks
-        input_ids = policy_input.input_ids
-        input_pad_masks = policy_input.attention_mask
+        input_ids = policy_td.input_ids
+        input_pad_masks = policy_td.attention_mask
 
         device = observation.device
+        lm: "GemmaModel" = self.causal_model.model.language_model
 
         torch.cuda.nvtx.range_push("embed_text_img")
-        b, n_cam = images.shape[0], images.shape[1]
-        images_flat = einops.rearrange(images, "b n c h w -> (b n) c h w")
+        b, n_cam = pixel_values.shape[0], pixel_values.shape[1]
+        images_flat = einops.rearrange(pixel_values, "b n c h w -> (b n) c h w")
         img_emb_flat = apply_checkpoint_when_training(
             self, self.causal_model.model.get_image_features, images_flat
         )
@@ -87,9 +99,7 @@ class PaligemmaBridge(VLMBridge):
             image_masks, "b n 1 -> b (n t)", t=img_emb_flat.shape[1]
         )
 
-        lang_emb = apply_checkpoint_when_training(
-            self, self.causal_model.model.language_model.embed_tokens, input_ids
-        )
+        lang_emb = apply_checkpoint_when_training(self, lm.embed_tokens, input_ids)
         torch.cuda.nvtx.range_pop()
 
         embs = [img_emb, lang_emb]
@@ -114,13 +124,13 @@ class PaligemmaBridge(VLMBridge):
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push("pos_emb")
-        lm: "GemmaModel" = self.causal_model.language_model
-        position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        position_ids = torch.cumsum(prefix_pad_masks, dim=1)
         pos_emb = lm.rotary_emb.forward(embs, position_ids)
         torch.cuda.nvtx.range_pop()
 
         hidden_states = embs * (embs.shape[-1] ** 0.5)
         kv_cache_list: List[Tuple[torch.Tensor, torch.Tensor]] = []
+        encoder_hidden_states_list: List[torch.Tensor] = []
         for i, layer in enumerate(lm.layers):
             torch.cuda.nvtx.range_push(f"layer_{i}")
             hidden_states, (k, v) = apply_checkpoint_when_training(
@@ -130,15 +140,25 @@ class PaligemmaBridge(VLMBridge):
                 prefix_att_mask,
                 pos_emb,
             )
-            kv_cache_list.append((k, v))
             torch.cuda.nvtx.range_pop()
 
+            kv_cache_list.append((k, v))
+            encoder_hidden_states_list.append(hidden_states)
+
         hidden_states = lm.norm(hidden_states)
-        
+
         vlm_outputs = VLMOutputs(
             last_hidden_state=hidden_states,
             prefix_pad_masks=prefix_pad_masks,
-            hidden_state_list=None,
+            hidden_state_list=tuple(encoder_hidden_states_list),
             kv_cache_list=tuple(kv_cache_list),
         )
-        return vlm_outputs, {}
+        # mean along seq dim
+        padding_ratio = policy_td.attention_mask.float().mean(dim=-1)
+        log_dict = {
+            "padding_ratio/mean": padding_ratio.mean(),
+            "padding_ratio/std": padding_ratio.std(),
+            "padding_ratio/min": padding_ratio.min(),
+            "padding_ratio/max": padding_ratio.max(),
+        }
+        return vlm_outputs, log_dict

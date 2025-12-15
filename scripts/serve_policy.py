@@ -72,9 +72,9 @@ def _state_tensors_from_obs(obs: Dict[str, Any]) -> Dict[str, torch.Tensor]:
         return torch.from_numpy(value).type(torch.float32)
 
     return {
-        ARM_STATE_CART_POS_KEY: _as_tensor(obs[ARM_STATE_CART_POS_KEY]),
-        ARM_STATE_CART_ROT_KEY: _as_tensor(obs[ARM_STATE_CART_ROT_KEY]),
-        GRIPPER_STATE_QPOS_KEY: _as_tensor(obs[GRIPPER_STATE_QPOS_KEY]),
+        ARM_STATE_CART_POS_KEY: _as_tensor(obs[ARM_STATE_CART_POS_KEY]) if ARM_STATE_CART_POS_KEY in obs else None,
+        ARM_STATE_CART_ROT_KEY: _as_tensor(obs[ARM_STATE_CART_ROT_KEY]) if ARM_STATE_CART_ROT_KEY in obs else None,
+        GRIPPER_STATE_QPOS_KEY: _as_tensor(obs[GRIPPER_STATE_QPOS_KEY]) if GRIPPER_STATE_QPOS_KEY in obs else None,
     }
 
 
@@ -224,7 +224,8 @@ def main(cfg: DictConfig) -> None:
     }
 
     # Warmup once to trigger initialization
-    warmup = True
+    # warmup = True
+    warmup = False
     if warmup:
         history_len = serve_cfg.policy.state_history + 1
         observation_in = {
@@ -266,9 +267,9 @@ def main(cfg: DictConfig) -> None:
             # print("---")
             t0 = time.monotonic()
             action = policy.infer(obs)
-            infer_ms = (time.monotonic() - t0) * 1000
+            infer_s = time.monotonic() - t0
             response = dict(action)
-            response["server_timing"] = {"infer_ms": infer_ms}
+            response["server_timing"] = {"infer_s": infer_s}
             server.send_response(response)
     except KeyboardInterrupt:
         logger.info("Shutting down server loop.")

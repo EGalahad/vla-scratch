@@ -154,6 +154,7 @@ def main(cfg: DictConfig) -> None:
     time_stamp = now.strftime("%H-%M-%S")
     run_dir = Path("./outputs") / date_stamp / f"{time_stamp}-{train_cfg.exp_name}"
     run_dir = run_dir.resolve()
+    cfg.run_dir = str(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     os.chdir(run_dir)
     setproctitle(f"{train_cfg.exp_name}")
@@ -164,6 +165,7 @@ def main(cfg: DictConfig) -> None:
 
     local_rank, global_rank, world_size, mesh = setup_dist()
     device = torch.device(type="cuda", index=local_rank)
+    cfg.world_size = world_size
 
     print_with_rank("create dataloaders...")
     (
@@ -245,8 +247,14 @@ def main(cfg: DictConfig) -> None:
         run_idx = run.name.split("-")[-1]
         run.name = f"{run_idx}-{default_run_name}"
 
-        save_train_config(train_cfg, run_dir)
-
+        train_cfg_path = save_train_config(train_cfg, run_dir)
+        run.save(str(train_cfg_path), base_path=str(run_dir))
+        # save cfg
+        cfg_path = run_dir / "cfg.yaml"
+        with open(cfg_path, "w") as f:
+            OmegaConf.save(cfg, f)
+        run.save(str(cfg_path), base_path=str(run_dir))
+        
     global_step = 0
     scheduler = None
     steps_per_epoch = max(1, len(dataloader) // train_cfg.grad_accum_steps)

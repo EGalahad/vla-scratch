@@ -52,8 +52,10 @@ def resolve_config_placeholders(
     return s
 
 
-def save_train_config(cfg: DictConfig, run_dir: Path) -> None:
-    OmegaConf.save(cfg, run_dir / "train-cfg.yaml")
+def save_train_config(cfg: DictConfig, run_dir: Path) -> Path:
+    train_cfg_path = run_dir / "train-cfg.yaml"
+    OmegaConf.save(cfg, train_cfg_path)
+    return train_cfg_path
 
 
 def merge_cfg_from_checkpoint(

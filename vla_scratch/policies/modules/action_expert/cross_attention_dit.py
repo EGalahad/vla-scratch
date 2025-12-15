@@ -363,10 +363,8 @@ class DiTModel(nn.Module):
         inputs_embeds: HiddenState,
         position_ids: PositionIds,
         adarms_cond: AdarmsCond,
-        *,
-        attention_mask: AttentionMask | None = None,
-        past_key_values: List[KVCache] | None = None,
-        encoder_hidden_states: List[torch.Tensor] | None = None,
+        attention_mask: AttentionMask,
+        encoder_hidden_states: List[torch.Tensor],
     ) -> (
         Tuple[HiddenState, List[KVCache]]
         | Tuple[HiddenState, List[KVCache], torch.Tensor | None]
