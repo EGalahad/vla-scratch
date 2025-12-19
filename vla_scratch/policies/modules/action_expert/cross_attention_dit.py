@@ -366,8 +366,7 @@ class DiTModel(nn.Module):
         attention_mask: AttentionMask,
         encoder_hidden_states: List[torch.Tensor],
     ) -> (
-        Tuple[HiddenState, List[KVCache]]
-        | Tuple[HiddenState, List[KVCache], torch.Tensor | None]
+        Tuple[HiddenState, torch.Tensor | None]
     ):
         # We currently ignore past_key_values as caching is not implemented.
         if inputs_embeds is None:
@@ -385,7 +384,6 @@ class DiTModel(nn.Module):
         cos, sin = self.rotary_emb(position_ids, dtype=inputs_embeds.dtype)
 
         hidden_states = inputs_embeds
-        kv_cache_list: List[KVCache] = []
         hidden_states_for_dispersive_loss = []
         cross_every = max(1, self.config.cross_attention_every)
         for i, layer in enumerate(self.blocks):
@@ -413,17 +411,16 @@ class DiTModel(nn.Module):
             )
             torch.cuda.nvtx.range_pop()
 
-            kv_cache_list.append((k, v))
 
         hidden_states = self.norm(hidden_states)
 
-        dispersive_loss = 0
+        dispersive_loss = 0.0
         if hidden_states_for_dispersive_loss:
             dispersive_loss = self._compute_dispersive_loss(
                 hidden_states_for_dispersive_loss
             )
-
-        return hidden_states, kv_cache_list, dispersive_loss
+        log_dict = {"loss/disp_loss": dispersive_loss.detach()}
+        return dispersive_loss, hidden_states, log_dict
 
     def _compute_dispersive_loss(
         self, hidden_states_list: List[torch.Tensor]

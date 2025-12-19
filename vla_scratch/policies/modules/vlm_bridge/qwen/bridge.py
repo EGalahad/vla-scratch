@@ -11,7 +11,7 @@ from vla_scratch.policies.utils.training import (
     apply_checkpoint_when_training,
     fully_shard_layers,
 )
-from vla_scratch.policies.modules.vlm_bridge.base import VLMBridge
+from vla_scratch.policies.modules.vlm_bridge.base import VLMBridge, TARGET_IGNORE_ID
 from vla_scratch.policies.modules.vlm_bridge.qwen.processor import QwenPolicyInput
 from vla_scratch.policies.modules.vlm_bridge.qwen.utils import (
     is_qwen3vl_forward_replaced,
@@ -23,10 +23,11 @@ from vla_scratch.policies.modules.vlm_bridge.data_types import VLMOutputs
 if TYPE_CHECKING:
     from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextModel
     from vla_scratch.transforms.data_types import Observation
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionModel
 
 
 class Qwen3VLBridge(VLMBridge):
-    def __init__(self, *, model_id: str, vlm_type: str, max_length: int = 256):
+    def __init__(self, *, model_id: str, vlm_type: str):
         super().__init__()
         tfm = importlib.import_module("transformers")
         try:
@@ -46,12 +47,10 @@ class Qwen3VLBridge(VLMBridge):
         self.processor = Qwen3VLProcessor.from_pretrained(model_id)
         if hasattr(self.processor, "tokenizer"):
             self.processor.tokenizer.padding_side = "left"
-        self.max_length = max_length
-        replace_qwen3vl_forward()
 
-        from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionModel
-        visual: Qwen3VLVisionModel = self.causal_model.model.visual
-        visual.prepared_freq_table = visual.rotary_pos_emb(64)
+        replace_qwen3vl_forward()
+        visual: "Qwen3VLVisionModel" = self.causal_model.model.visual
+        visual.prepared_freq_table = visual.rotary_pos_emb(128)
 
     def apply_fsdp(self, mp_policy, mesh):
         fully_shard_layers(self.causal_model.model.visual.blocks, mesh, mp_policy)
@@ -125,6 +124,7 @@ class Qwen3VLBridge(VLMBridge):
         att_masks = [
             torch.ones(inputs_embeds.shape[1], dtype=torch.bool, device=device)
         ]
+        extra_len = 0
         if extra_embs is not None:
             torch.cuda.nvtx.range_push("extend_extra_tokens")
             embs.append(extra_embs)
@@ -204,8 +204,17 @@ class Qwen3VLBridge(VLMBridge):
                 hidden_states.add_(deepstack_image_embeds_deltas[layer_idx])
                 torch.cuda.nvtx.range_pop()
 
+        # compute ce loss
         hidden_states = lm.norm(hidden_states)
+        predicted_probs = self.causal_model.lm_head(hidden_states[:, :-extra_len])
+        predicted_probs = einops.rearrange(predicted_probs[:, :-1], "b s v -> (b s) v")
+        target_ids = einops.rearrange(policy_td.target_ids[:, 1:], "b s -> (b s)")
+        ce_loss = torch.nn.functional.cross_entropy(
+            predicted_probs, target_ids, ignore_index=TARGET_IGNORE_ID, reduction="sum"
+        )
+        ce_loss = ce_loss / (target_ids != TARGET_IGNORE_ID).sum().clamp(min=1)
 
+        # construct VLMOutputs
         vlm_outputs = VLMOutputs(
             last_hidden_state=hidden_states,
             prefix_pad_masks=prefix_pad_masks,
@@ -219,5 +228,6 @@ class Qwen3VLBridge(VLMBridge):
             "padding_ratio/std": padding_ratio.std(),
             "padding_ratio/min": padding_ratio.min(),
             "padding_ratio/max": padding_ratio.max(),
+            "loss/ce_loss": ce_loss.detach(),
         }
-        return vlm_outputs, log_dict
+        return ce_loss, vlm_outputs, log_dict

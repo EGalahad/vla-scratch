@@ -152,8 +152,10 @@ class PiPolicy(BasePolicy):
         self.register_buffer("suffix_att_mask", suffix_att_mask, persistent=False)
 
         if config.suffix_add_pos_emb:
-            pos_emb = torch.zeros(suffix_len, action_expert_width)
-            self.position_embedding = nn.Parameter(pos_emb)
+            pos_emb_state = torch.zeros(config.state_history, action_expert_width)
+            self.position_embedding_state = nn.Parameter(pos_emb_state)
+            pos_emb_action = torch.zeros(config.action_horizon, action_expert_width)
+            self.position_embedding_action = nn.Parameter(pos_emb_action)
 
         param_device = next(self.parameters()).device
         self.time_dist = build_beta_time_dist(
@@ -170,7 +172,8 @@ class PiPolicy(BasePolicy):
         # nn.init.xavier_uniform_(self.action_out_proj.weight)
         # nn.init.zeros_(self.action_out_proj.bias)
         if self.config.suffix_add_pos_emb:
-            nn.init.normal_(self.position_embedding, mean=0.0, std=0.02)
+            nn.init.normal_(self.position_embedding_state, mean=0.0, std=0.02)
+            nn.init.normal_(self.position_embedding_action, mean=0.0, std=0.02)
         self.action_expert.initialize_weights()
 
     def apply_fsdp(self, param_type, reduce_type, output_dtype, mesh):
@@ -200,7 +203,7 @@ class PiPolicy(BasePolicy):
 
     def encode_prefix(
         self, observation: "Observation"
-    ) -> Tuple[float, EncodingOutput, Dict]:
+    ) -> Tuple[torch.Tensor, EncodingOutput, Dict]:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
         # Prepare extra observation register tokens if configured
         extra_embs = None
@@ -213,7 +216,7 @@ class PiPolicy(BasePolicy):
             extra_att = self.obs_registers_att_masks
 
         # Bridge handles model-specific preprocessing + transformer forward
-        vlm_outputs, log_dict = self.vlm_bridge.encode(
+        ce_loss, vlm_outputs, log_dict = self.vlm_bridge.encode(
             observation=observation,
             extra_embs=extra_embs,
             extra_pad_masks=extra_pad,
@@ -251,7 +254,7 @@ class PiPolicy(BasePolicy):
             hidden_state_list=hidden_states,
             batch_size=observation.shape,
         )
-        return 0.0, encoding_output, log_dict
+        return ce_loss, encoding_output, log_dict
 
     def predict_suffix(
         self,
@@ -259,7 +262,7 @@ class PiPolicy(BasePolicy):
         encoding_output: EncodingOutput,
         noisy_actions,
         time,
-    ):
+    ) -> Tuple[torch.Tensor, torch.Tensor, Dict]:
         """Apply one denoising step of `noisy_actions` at a given timestep."""
         prefix_pad_masks = encoding_output.prefix_pad_masks
 
@@ -285,7 +288,7 @@ class PiPolicy(BasePolicy):
         torch.cuda.nvtx.range_pop()
 
         encoder_hidden_states = encoding_output.hidden_state_list.unbind(dim=1)
-        suffix_out, _, disp_loss = self.action_expert.forward(
+        disp_loss, suffix_out, log_dict = self.action_expert.forward(
             inputs_embeds=suffix_embs,
             position_ids=position_ids,
             adarms_cond=time_emb,
@@ -294,14 +297,14 @@ class PiPolicy(BasePolicy):
         )
 
         suffix_out = suffix_out[:, -self.config.action_horizon :, :]
-        return disp_loss, self.action_out_proj(suffix_out)
+        return disp_loss, self.action_out_proj(suffix_out), log_dict
 
     def compute_loss(
         self,
         data_sample: "DataSample",
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, Dict]:
         torch.cuda.nvtx.range_push("Model Encode Prefix")
-        _, encoding_output, log_dict = self.encode_prefix(
+        ce_loss, encoding_output, log_dict_prefix = self.encode_prefix(
             observation=data_sample.observation
         )
         torch.cuda.nvtx.range_pop()
@@ -326,8 +329,6 @@ class PiPolicy(BasePolicy):
         encoding_output = repeat_batch(
             encoding_output, self.config.num_noise_per_sample
         )
-        # prefix_pad_masks = encoding_output.prefix_pad_masks
-        # encoder_hidden_states = encoding_output.hidden_state_list.unbind(dim=1)
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push("Apply Noise")
@@ -338,26 +339,25 @@ class PiPolicy(BasePolicy):
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push("Model Predict Suffix")
-        disp_loss, v_t = self.predict_suffix(
+        disp_loss, v_t, log_dict_suffix = self.predict_suffix(
             state=data_sample.observation.state,
-            # prefix_pad_masks=prefix_pad_masks,
-            # encoder_hidden_states=encoder_hidden_states,
             encoding_output=encoding_output,
             noisy_actions=noisy_actions,
             time=timestep,
         )
+        torch.cuda.nvtx.range_pop()
+
         flow_mse = torch.nn.functional.mse_loss(
             u_t.to(v_t.dtype), v_t, reduction="none"
         ).mean()
-        loss = flow_mse + self.config.disp_loss_weight * disp_loss
-        torch.cuda.nvtx.range_pop()
-
-        log_dict.update(
-            {
-                "loss/flow_mse": flow_mse.detach(),
-                "loss/disp_loss": disp_loss.detach(),
-            }
+        loss = (
+            flow_mse
+            + self.config.ce_loss_weight * ce_loss
+            + self.config.disp_loss_weight * disp_loss
         )
+
+        log_dict = {**log_dict_prefix, **log_dict_suffix}
+        log_dict["loss/flow_mse"] = flow_mse.detach()
 
         return loss, log_dict
 
@@ -391,7 +391,7 @@ class PiPolicy(BasePolicy):
 
         x_t = noise
         while time_float >= dt_float / 2:
-            _, v_t = self.predict_suffix(
+            _, v_t, _ = self.predict_suffix(
                 observation.state,
                 encoding_output=encoding_output,
                 # prefix_pad_masks,
@@ -437,14 +437,17 @@ class PiPolicy(BasePolicy):
         action_emb = apply_checkpoint_when_training(
             self, self.action_in_proj, noisy_actions
         )
+
         if self.config.use_state:
             state_emb = apply_checkpoint_when_training(self, self.state_in_proj, state)
+            if self.config.suffix_add_pos_emb:
+                state_emb = state_emb + self.position_embedding_state[None, :, :]
+                action_emb = action_emb + self.position_embedding_action[None, :, :]
             suffix_emb = torch.cat([state_emb, action_emb], dim=1)
         else:
+            if self.config.suffix_add_pos_emb:
+                action_emb = action_emb + self.position_embedding_action[None, :, :]
             suffix_emb = action_emb
-
-        if self.config.suffix_add_pos_emb:
-            suffix_emb.add_(self.position_embedding.unsqueeze(0))
 
         bsize = action_emb.shape[0]
         pad_mask = einops.repeat(

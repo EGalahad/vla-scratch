@@ -10,6 +10,7 @@ from vla_scratch.policies.modules.vlm_bridge.data_types import VLMOutputs
 if TYPE_CHECKING:
     from vla_scratch.transforms.data_types import Observation
 
+TARGET_IGNORE_ID = -100
 
 class VLMBridge(nn.Module):
     """Abstract base class for VLM bridges.

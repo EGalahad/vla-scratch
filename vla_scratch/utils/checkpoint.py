@@ -137,7 +137,7 @@ def load_checkpoint(
         model_sd = {}
         optim_sd = {}
 
-    options = StateDictOptions(full_state_dict=True, broadcast_from_rank0=True)
+    options = StateDictOptions(full_state_dict=True, broadcast_from_rank0=True, strict=False)
     missing, unexpected = set_model_state_dict(
         model=model,
         model_state_dict=model_sd,

@@ -21,6 +21,8 @@ class ToDataSample(TransformFn):
             image_masks=sample[PROCESSED_IMAGE_MASK_KEY],
             state=sample[PROCESSED_STATE_KEY],
             task=sample[TASK_KEY],
+            generation_prompt=sample.get("observation.generation_prompt", ""),
+            generation_answer=sample.get("observation.generation_answer", ""),
         )
         if (actions := sample.get(PROCESSED_ACTION_KEY)) is not None:
             action = ActionChunk(actions=actions)

@@ -1,5 +1,6 @@
 import re
-from typing import TYPE_CHECKING, Iterable, List, Set
+import json
+from typing import TYPE_CHECKING, Iterable, List, Set, Tuple
 
 import torch
 import numpy as np
@@ -11,6 +12,8 @@ from vla_scratch.transforms.data_keys import (
     PROCESSED_IMAGE_MASK_KEY,
     PROCESSED_STATE_KEY,
     TASK_KEY,
+    GENERATION_PROMPT_KEY,
+    GENERATION_ANSWER_KEY,
 )
 
 if TYPE_CHECKING:
@@ -31,7 +34,9 @@ def _expand_split(value) -> List[int]:
     return []
 
 
-def _select_episodes(meta: LeRobotDatasetMetadata, split_patterns: List[str]) -> List[int] | None:
+def _select_episodes(
+    meta: LeRobotDatasetMetadata, split_patterns: List[str]
+) -> List[int] | None:
     """
     Build an episode list by matching split names against provided regex patterns.
     """
@@ -46,12 +51,24 @@ def _select_episodes(meta: LeRobotDatasetMetadata, split_patterns: List[str]) ->
     return sorted(selected) if selected else []
 
 
+def _load_jsonl(path):
+    records = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            records.append(json.loads(line))
+    return records
+
+
 class DontBlindDataset(torch.utils.data.Dataset):
     """
     Minimal LeRobot dataset wrapper for BlindVLA.
 
     - Keeps actions as-is (no extra transforms).
     - Emits processed keys defined in `vla_scratch.transforms.data_keys`.
+    - If `meta/bboxes.jsonl` is present, resolves (episode_index, frame_index) -> bbox list.
     """
 
     def __init__(self, config: "DontBlindConfig"):
@@ -71,7 +88,10 @@ class DontBlindDataset(torch.utils.data.Dataset):
         self.action_horizon = config.action_horizon
         self.state_history = config.state_history
         delta_timestamps = {
-            "actions": (np.linspace(0, self.action_horizon - 1, self.action_horizon, dtype=int) / fps).tolist(),
+            "actions": (
+                np.linspace(0, self.action_horizon - 1, self.action_horizon, dtype=int)
+                / fps
+            ).tolist(),
         }
 
         self.dataset = LeRobotDataset(
@@ -83,6 +103,18 @@ class DontBlindDataset(torch.utils.data.Dataset):
         # Expose selection metadata for downstream inspection utilities.
         self.episodes = episodes
         self.metadata = meta
+
+        self._bbox_records: List[dict] = []
+        self._bbox_idx_map: dict[Tuple[int, int], int] = {}
+        bbox_path = meta.root / "meta" / "bboxes.jsonl"
+        if bbox_path.exists():
+            print(f"Loading bounding boxes from {bbox_path}")
+            records = _load_jsonl(bbox_path)
+            records.sort(key=lambda r: (int(r["episode_index"]), int(r["frame_index"])))
+            self._bbox_records = records
+            for bbox_idx, r in enumerate(records):
+                key = (int(r["episode_index"]), int(r["frame_index"]))
+                self._bbox_idx_map.setdefault(key, bbox_idx)
 
     def __len__(self):
         return len(self.dataset)
@@ -96,11 +128,33 @@ class DontBlindDataset(torch.utils.data.Dataset):
 
         state_len = self.state_history + 1
 
+        ep_idx = int(item["episode_index"].item())
+        frame_idx = int(item["frame_index"].item())
+        bbox_idx = self._bbox_idx_map.get((ep_idx, frame_idx), -1)
+        if 0 <= bbox_idx < len(self._bbox_records):
+            bbox = self._bbox_records[bbox_idx].get("bbox")
+            bbox_coords = [[int(x * 1000) for x in d["bbox_normalized"]] for d in bbox]
+            labels = [d["label"] for d in bbox]
+            bbox = [
+                {"bbox_2d": coords, "label": label}
+                for coords, label in zip(bbox_coords, labels)
+            ]
+            prompt = (
+                "Please return bounding boxes for all task-relevant objects in JSON format as"
+                '[{"bbox_2d": [x1, y1, x2, y2], "label": "<object_name>"}]'
+            )
+            answer = json.dumps(bbox)
+        else:
+            prompt = ""
+            answer = ""
+        
         processed = {
             PROCESSED_IMAGE_KEY: (img * 255).to(torch.uint8).unsqueeze(0),
             PROCESSED_IMAGE_MASK_KEY: torch.ones((1, 1), dtype=torch.bool),
             PROCESSED_ACTION_KEY: actions,
             PROCESSED_STATE_KEY: torch.randn((state_len, 1), dtype=torch.float32),
             TASK_KEY: item.get("task"),
+            GENERATION_PROMPT_KEY: prompt,
+            GENERATION_ANSWER_KEY: answer,
         }
         return processed

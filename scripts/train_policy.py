@@ -174,7 +174,11 @@ def main(cfg: DictConfig) -> None:
         subtrain_dataloader,
     ) = create_dataloaders(train_cfg, world_size, global_rank, add_noise=True)
 
-    dummy_data, _ = next(iter(dataloader))
+    try:
+        dummy_data, _ = next(iter(dataloader))
+    except RuntimeError as e:
+        print("If you see input ids shape incompatible errors here, please increase the max_length in processor config in vla_scratch/policies/pi/config.py!")
+        raise e
     dummy_data: "DataSample" = dummy_data[0:1].to(device)
     train_cfg.policy.action_dim = dummy_data.action_chunk.actions.shape[-1]
     train_cfg.policy.state_dim = dummy_data.observation.state.shape[-1]
@@ -226,12 +230,18 @@ def main(cfg: DictConfig) -> None:
     log_model_state_sizes(model, optimizer)
 
     if train_cfg.checkpoint_path is not None:
-        load_checkpoint(
+        missing, unexpected = load_checkpoint(
             model=model,
             checkpoint=train_cfg.checkpoint_path,
             global_rank=global_rank,
             optimizer=optimizer if train_cfg.load_optimizer else None,
         )
+        if local_rank == 0:
+            print(f"Loaded checkpoint '{train_cfg.checkpoint_path}'")
+            if len(missing) > 0:
+                print(f"  Missing keys: {missing}")
+            if len(unexpected) > 0:
+                print(f"  Unexpected keys: {unexpected}")
 
     if global_rank == 0:
         run = wandb.init(
@@ -239,7 +249,10 @@ def main(cfg: DictConfig) -> None:
             mode=train_cfg.wandb.mode,
             tags=train_cfg.wandb.tags,
         )
+        # update cfg
         run.config.update(OmegaConf.to_container(cfg))
+        # update train_cfg
+        # run.config.update(train_cfg.asdict())
 
         default_run_name = (
             f"{train_cfg.exp_name}-{datetime.datetime.now().strftime('%m-%d-%H-%M')}"

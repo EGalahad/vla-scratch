@@ -5,6 +5,7 @@ import torch
 from tensordict import TensorClass
 
 from vla_scratch.transforms.base import TransformFn
+from vla_scratch.policies.modules.vlm_bridge.base import TARGET_IGNORE_ID
 
 if TYPE_CHECKING:
     from vla_scratch.transforms.data_types import DataSample
@@ -13,6 +14,7 @@ if TYPE_CHECKING:
 
 class QwenPolicyInput(TensorClass):
     input_ids: torch.LongTensor
+    target_ids: torch.LongTensor
     attention_mask: torch.BoolTensor
     pixel_values: torch.FloatTensor
     image_grid_thw: torch.LongTensor
@@ -29,29 +31,41 @@ class QwenProcessor(TransformFn):
         processor_class: str,
         model_id: str,
         max_length: int = 256,
-        add_generation_prompt: bool = True,
         padding: str | bool = "max_length",
     ) -> None:
         processors = importlib.import_module("transformers")
         processor_cls = getattr(processors, processor_class)
         self.processor: "Qwen3VLProcessor" = processor_cls.from_pretrained(model_id)
         self.max_length = max_length
-        self.add_generation_prompt = add_generation_prompt
         self.padding = padding
 
+        tokenizer = self.processor.tokenizer
+        self.im_start_id = tokenizer.convert_tokens_to_ids("<|im_start|>")
+        self.im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+        self.assistant_header_ids = tokenizer.encode(
+            "assistant\n", add_special_tokens=False
+        )
+
     def compute(self, sample: "DataSample") -> "DataSample":
-        content: List[Dict] = [
+        user_content: List[Dict] = [
             {"type": "image", "image": img} for img in sample.observation.images
         ]
-        content.append({"type": "text", "text": sample.observation.task})
-        messages = [{"role": "user", "content": content}]
+        user_content.append({"type": "text", "text": sample.observation.task})
+        user_content.append(
+            {"type": "text", "text": sample.observation.generation_prompt}
+        )
+
+        gpt_content = [{"type": "text", "text": sample.observation.generation_answer}]
+        messages = [
+            {"role": "user", "content": user_content},
+            {"role": "assistant", "content": gpt_content},
+        ]
 
         encoded = self.processor.apply_chat_template(
             [messages],
             tokenize=True,
-            add_generation_prompt=True,
+            add_generation_prompt=False,
             return_dict=True,
-
             text_kwargs={
                 "max_length": self.max_length,
                 "truncation": False,
@@ -61,13 +75,29 @@ class QwenProcessor(TransformFn):
             },
         )
 
+        assistant_mask = self.assistant_content_mask(
+            encoded,
+            im_start_id=self.im_start_id,
+            assistant_header_ids=self.assistant_header_ids,
+            im_end_id=self.im_end_id,
+        )
+        # target_ids = -100 for non-assistant content tokens, input_ids otherwise
+        target_ids = encoded["input_ids"].clone()  # shape: [1, self.max_length]
+        target_ids[~assistant_mask] = TARGET_IGNORE_ID
+        # For debug
+        # target_ids[~assistant_mask] = 0
+        # self.processor.batch_decode(target_ids, skip_special_tokens=False)
+        # breakpoint()
+
         position_ids, mrope_position_deltas = self.get_rope_index(
             input_ids=encoded["input_ids"],
             image_grid_thw=encoded["image_grid_thw"],
             attention_mask=encoded["attention_mask"],
         )
+
         policy_td = QwenPolicyInput(
             input_ids=encoded["input_ids"].squeeze(0).long(),
+            target_ids=target_ids.squeeze(0).long(),
             attention_mask=encoded["attention_mask"].squeeze(0).bool(),
             pixel_values=encoded["pixel_values"],
             image_grid_thw=encoded["image_grid_thw"],
@@ -80,6 +110,70 @@ class QwenProcessor(TransformFn):
         sample.observation.policy_input = policy_td
 
         return sample
+
+    @staticmethod
+    def assistant_content_mask(
+        encoded: dict, im_start_id: int, assistant_header_ids: list[int], im_end_id: int
+    ) -> torch.BoolTensor:
+        """
+        Returns a boolean mask (B, T) that is True on assistant *content* tokens and False elsewhere.
+
+        This parses ChatML boundaries directly:
+        <|im_start|>assistant\\n ... <|im_end|>
+
+        Notes:
+        - This does not rely on `return_assistant_tokens_mask` / `{% generation %}` blocks.
+        - Special wrapper tokens (im_start / role / im_end) are excluded from the mask.
+        """
+
+        input_ids = encoded["input_ids"]
+        if not isinstance(input_ids, torch.Tensor):
+            input_ids = torch.tensor(input_ids, dtype=torch.long)
+        if input_ids.ndim == 1:
+            input_ids = input_ids.unsqueeze(0)
+
+        bsz, seqlen = input_ids.shape
+        mask = torch.zeros((bsz, seqlen), dtype=torch.bool, device=input_ids.device)
+
+        for b in range(bsz):
+            i = 0
+            while i < seqlen:
+                if input_ids[b, i].item() != im_start_id:
+                    i += 1
+                    continue
+
+                header_start = i + 1
+                header_end = header_start + len(assistant_header_ids)
+                if header_end > seqlen:
+                    break
+
+                if (
+                    input_ids[b, header_start:header_end].tolist()
+                    != assistant_header_ids
+                ):
+                    i += 1
+                    continue
+
+                # Content starts right after "<|im_start|>assistant\n"
+                j = header_end
+                while j < seqlen and input_ids[b, j].item() != im_end_id:
+                    mask[b, j] = True
+                    j += 1
+
+                # Continue scan after this assistant block.
+                i = j + 1
+
+        if "attention_mask" in encoded:
+            attention_mask = encoded["attention_mask"]
+            if not isinstance(attention_mask, torch.Tensor):
+                attention_mask = torch.tensor(
+                    attention_mask, dtype=torch.long, device=mask.device
+                )
+            if attention_mask.ndim == 1:
+                attention_mask = attention_mask.unsqueeze(0)
+            mask = mask & attention_mask.bool()
+
+        return mask
 
     def get_rope_index(
         self,

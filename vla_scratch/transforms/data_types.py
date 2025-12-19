@@ -7,11 +7,16 @@ from tensordict import TensorClass, TensorDict
 # In that case, a causal mask should be applied to the question answering part and a loss mask will indicate the region to compute loss on.
 
 
+# the dataset is responsible for preparing the generation prompt and answer.
+# currently only support for Qwen3VL bbox detection.
+
 class Observation(TensorClass):
     images: at.UInt8[torch.Tensor, "*batch num_cam 3 height width"]
     image_masks: at.Bool[torch.Tensor, "*batch num_cam 1"]
     state: at.Float[torch.Tensor, "*batch state_history state_dim"]
     task: str
+    generation_prompt: str
+    generation_answer: str
     # tokenized_prompt: at.Int64[torch.Tensor, "*batch max_tokens"]
     # tokenized_prompt_mask: at.Bool[torch.Tensor, "*batch max_tokens"]
     policy_input: TensorDict = None  # Dynamic field for policy-specific inputs
