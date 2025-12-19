@@ -89,12 +89,12 @@ class PaligemmaBridge(VLMBridge):
         lm: "GemmaModel" = self.causal_model.model.language_model
 
         torch.cuda.nvtx.range_push("embed_text_img")
-        b, n_cam = pixel_values.shape[0], pixel_values.shape[1]
+        bsz, n_cam = pixel_values.shape[0], pixel_values.shape[1]
         images_flat = einops.rearrange(pixel_values, "b n c h w -> (b n) c h w")
         img_emb_flat = apply_checkpoint_when_training(
             self, self.causal_model.model.get_image_features, images_flat
         )
-        img_emb = einops.rearrange(img_emb_flat, "(b n) t d -> b (n t) d", b=b, n=n_cam)
+        img_emb = einops.rearrange(img_emb_flat, "(b n) t d -> b (n t) d", b=bsz, n=n_cam)
         img_mask_repeat = einops.repeat(
             image_masks, "b n 1 -> b (n t)", t=img_emb_flat.shape[1]
         )
@@ -116,7 +116,7 @@ class PaligemmaBridge(VLMBridge):
 
         embs = torch.cat(embs, dim=1)
         prefix_pad_masks = torch.cat(pad_masks, dim=1)
-        prefix_att_masks_1d = torch.cat(att_masks, dim=0).expand(b, -1)
+        prefix_att_masks_1d = torch.cat(att_masks, dim=0).expand(bsz, -1)
 
         torch.cuda.nvtx.range_push("build_attn_mask")
         prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks_1d)
@@ -157,6 +157,7 @@ class PaligemmaBridge(VLMBridge):
             key_states=key_states,
             value_states=value_states,
             hidden_state_list=hidden_state_list,
+            batch_size=[bsz],
         )
         # mean along seq dim
         padding_ratio = policy_td.attention_mask.float().mean(dim=-1)
