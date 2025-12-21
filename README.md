@@ -13,7 +13,7 @@
 - **Explicit Data Model for Composable Modules** 
     - `TensorClass` is used to define explicit data boundaries for [dataset](vla_scratch/transforms/data_types.py) and [policy](vla_scratch/policies/utils/data_types.py), making our codebase fully typed and modular.
     - This unified sample schema allows heterogeneous dataset co-training, fast `.to(device)` calls, and clearer contracts between datasets, policies, and transforms.
-    - TODO: diagram here.
+    ![alt text](assets/data_model.png)
 - **Dedicated Tuning for a First-Class Performance Stack** 
     - The [Qwen3-VL bridge](vla_scratch/policies/modules/vlm_bridge/qwen/) rewrites the forward path to minimize host-device syncs, making throughput 2x higher.
     - Layer-wise FSDP sharding and gradient checkpointing saves memory up to 2x, making it easier to scale model parameters.
