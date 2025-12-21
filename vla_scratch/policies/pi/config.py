@@ -26,13 +26,13 @@ class PiConfig(PolicyConfig):
     suffix_add_pos_emb: bool = True
 
     use_state: bool = True
-    num_obs_registers: int = 0
-    expert_only_use_register: bool = False
+    num_obs_registers: int = 4
+    expert_only_use_register: bool = True
 
     num_noise_per_sample: int = 2
     num_noise_before_topk: int = 2
     detach_kv_cache: bool = False
-    ce_loss_weight: float = 1.0
+    ce_loss_weight: float = 0.1
     disp_loss_weight: float = 0.0
     time_dist_alpha: float = 1.0
     time_dist_beta: float = 1.5

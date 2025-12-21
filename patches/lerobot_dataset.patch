@@ -1,0 +1,25 @@
+--- lerobot_dataset.py
++++ lerobot_dataset-corrected.py
+@@ -496,6 +496,12 @@
+             check_delta_timestamps(self.delta_timestamps, self.fps, self.tolerance_s)
+             self.delta_indices = get_delta_indices(self.delta_timestamps, self.fps)
+
++        # Setup episode index to array index mapping
++        if episodes is not None:
++            self.ep_idx_to_arr_idx = {ep_idx: arr_idx for arr_idx, ep_idx in enumerate(episodes)}
++        else:
++            self.ep_idx_to_arr_idx = {ep_idx: ep_idx for ep_idx in range(len(self.episode_data_index["from"]))}
++
+     def push_to_hub(
+         self,
+         branch: str | None = None,
+@@ -708,7 +714,8 @@
+
+         query_indices = None
+         if self.delta_indices is not None:
+-            query_indices, padding = self._get_query_indices(idx, ep_idx)
++            # query_indices, padding = self._get_query_indices(idx, ep_idx)
++            query_indices, padding = self._get_query_indices(idx, self.ep_idx_to_arr_idx[ep_idx])
+             query_result = self._query_hf_dataset(query_indices)
+             item = {**item, **padding}
+             for key, val in query_result.items():

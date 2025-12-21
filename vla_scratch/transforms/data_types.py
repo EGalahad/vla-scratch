@@ -17,8 +17,6 @@ class Observation(TensorClass):
     task: str
     generation_prompt: str
     generation_answer: str
-    # tokenized_prompt: at.Int64[torch.Tensor, "*batch max_tokens"]
-    # tokenized_prompt_mask: at.Bool[torch.Tensor, "*batch max_tokens"]
     policy_input: TensorDict = None  # Dynamic field for policy-specific inputs
 
 
