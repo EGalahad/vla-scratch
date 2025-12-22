@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, MISSING
 from typing import Any, List, Optional
 from vla_scratch.utils.config import locate_class
 
@@ -8,8 +8,8 @@ class PolicyConfig:
     _target_: str
     transforms: List[Any]
 
-    state_history: int
-    action_horizon: int
+    state_history: int = MISSING
+    action_horizon: int = MISSING
     state_dim: Optional[int] = None
     action_dim: Optional[int] = None
 

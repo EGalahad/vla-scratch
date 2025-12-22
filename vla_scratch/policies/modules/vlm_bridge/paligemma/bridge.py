@@ -76,7 +76,7 @@ class PaligemmaBridge(VLMBridge):
         extra_embs: Optional[torch.Tensor] = None,
         extra_pad_masks: Optional[torch.Tensor] = None,
         extra_att_masks: Optional[torch.Tensor] = None,
-    ) -> Tuple[VLMOutputs, Dict]:
+    ) -> Tuple[torch.Tensor, VLMOutputs, Dict]:
         policy_td = observation.policy_input
         if not isinstance(policy_td, PaligemmaPolicyInput):
             raise TypeError("Observation policy_input must be PaligemmaPolicyInput")
@@ -125,21 +125,22 @@ class PaligemmaBridge(VLMBridge):
 
         torch.cuda.nvtx.range_push("pos_emb")
         position_ids = torch.cumsum(prefix_pad_masks, dim=1)
-        pos_emb = lm.rotary_emb.forward(embs, position_ids)
+        position_emb = lm.rotary_emb.forward(embs, position_ids)
+        hidden_states = embs * (embs.shape[-1] ** 0.5)
         torch.cuda.nvtx.range_pop()
 
-        hidden_states = embs * (embs.shape[-1] ** 0.5)
         kv_cache_list: List[Tuple[torch.Tensor, torch.Tensor]] = []
         encoder_hidden_states_list: List[torch.Tensor] = []
-        for i, layer in enumerate(lm.layers):
-            torch.cuda.nvtx.range_push(f"layer_{i}")
-            hidden_states, (k, v) = apply_checkpoint_when_training(
+        for layer_idx, decoder_layer in enumerate(lm.layers):
+            torch.cuda.nvtx.range_push(f"layer_{layer_idx}")
+            outputs = apply_checkpoint_when_training(
                 self,
-                layer,
+                decoder_layer,
                 hidden_states,
                 prefix_att_mask,
-                pos_emb,
+                position_emb,
             )
+            hidden_states, (k, v) = outputs
             torch.cuda.nvtx.range_pop()
 
             kv_cache_list.append((k, v))
@@ -167,4 +168,4 @@ class PaligemmaBridge(VLMBridge):
             "padding_ratio/min": padding_ratio.min(),
             "padding_ratio/max": padding_ratio.max(),
         }
-        return vlm_outputs, log_dict
+        return 0.0, vlm_outputs, log_dict

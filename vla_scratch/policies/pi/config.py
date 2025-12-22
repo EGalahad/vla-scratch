@@ -25,7 +25,7 @@ class PiConfig(PolicyConfig):
     )
     suffix_add_pos_emb: bool = True
 
-    use_state: bool = True
+    use_state: bool = False
     num_obs_registers: int = 4
     expert_only_use_register: bool = True
 
@@ -38,12 +38,10 @@ class PiConfig(PolicyConfig):
     time_dist_beta: float = 1.5
 
 
-default_pi_config = PiConfig(
+pi_paligemma_config = PiConfig(
     _target_="vla_scratch.policies.pi.policy.PiPolicy",
     model_id="google/paligemma-3b-mix-224",
     vlm_type="PaliGemmaForConditionalGeneration",
-    state_history=1,
-    action_horizon=20,
     transforms=[
         {
             "_target_": "vla_scratch.policies.modules.vlm_bridge.paligemma.processor.PaligemmaProcessor",
@@ -56,7 +54,7 @@ default_pi_config = PiConfig(
 )
 
 pi_paligemma2_config = replace(
-    default_pi_config,
+    pi_paligemma_config,
     model_id="google/paligemma2-3b-mix-224",
     transforms=[
         {
@@ -70,7 +68,7 @@ pi_paligemma2_config = replace(
 )
 
 pi_qwen_config = replace(
-    default_pi_config,
+    pi_paligemma_config,
     model_id="Qwen/Qwen3-VL-2B-Instruct",
     vlm_type="Qwen3VLForConditionalGeneration",
     transforms=[
@@ -87,7 +85,7 @@ pi_qwen_config = replace(
 cs = ConfigStore.instance()
 cs.store(
     name="pi-paligemma",
-    node=default_pi_config,
+    node=pi_paligemma_config,
     group="policy",
 )
 cs.store(

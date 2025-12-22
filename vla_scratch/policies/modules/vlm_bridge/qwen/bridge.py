@@ -21,7 +21,7 @@ from vla_scratch.policies.utils.transformers import make_att_2d_masks
 from vla_scratch.policies.modules.vlm_bridge.data_types import VLMOutputs
 
 if TYPE_CHECKING:
-    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextModel
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLTextModel, Qwen3VLModel
     from vla_scratch.transforms.data_types import Observation
     from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionModel
 
@@ -35,7 +35,7 @@ class Qwen3VLBridge(VLMBridge):
         except AttributeError as e:
             raise ImportError(f"transformers has no class named '{vlm_type}'.") from e
 
-        self.causal_model = vlm_cls.from_pretrained(
+        self.causal_model: "Qwen3VLModel" = vlm_cls.from_pretrained(
             model_id,
             attn_implementation="sdpa",
             trust_remote_code=True,
@@ -72,7 +72,7 @@ class Qwen3VLBridge(VLMBridge):
         extra_embs: Optional[torch.Tensor] = None,
         extra_pad_masks: Optional[torch.Tensor] = None,
         extra_att_masks: Optional[torch.Tensor] = None,
-    ) -> Tuple[VLMOutputs, Dict]:
+    ) -> Tuple[torch.Tensor, VLMOutputs, Dict]:
         device = observation.device
         bsz = observation.shape[0]
         REPLACED = is_qwen3vl_forward_replaced()
@@ -158,7 +158,7 @@ class Qwen3VLBridge(VLMBridge):
         prefix_att_mask = einops.rearrange(prefix_att_2d, "b i j -> b 1 i j")
         torch.cuda.nvtx.range_pop()
 
-        position_embeddings = lm.rotary_emb(embs, position_ids)
+        position_emb = lm.rotary_emb.forward(embs, position_ids)
         hidden_states = embs
 
         kv_cache_list: List[Tuple[torch.Tensor, torch.Tensor]] = []
@@ -183,7 +183,7 @@ class Qwen3VLBridge(VLMBridge):
                 decoder_layer,
                 hidden_states,
                 attention_mask=prefix_att_mask,
-                position_embeddings=position_embeddings,
+                position_embeddings=position_emb,
                 past_key_values=past_key_values_this_layer,
             )
             if REPLACED:

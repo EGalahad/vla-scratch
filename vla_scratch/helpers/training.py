@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import copy
+import itertools
+from concurrent.futures import ThreadPoolExecutor
+from torch.utils.data import DataLoader, DistributedSampler
+
 import datetime
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Set, Tuple, Iterator, Optional
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -152,24 +157,32 @@ def create_dataloaders(
     global_rank: int,
     *,
     add_noise: bool = False,
-) -> tuple[DataLoader, dict[str, tuple[DataLoader, str]]]:
-    train_cfg.data.action_horizon = train_cfg.policy.action_horizon
-    train_cfg.data.state_history = train_cfg.policy.state_history
+) -> tuple[dict[str, DataLoader], dict[str, tuple[DataLoader, str]]]:
+    train_loaders: Dict[str, DataLoader] = {}
+    if len(train_cfg.train_data.keys()) > 0:
+        train_items = [
+            (key, data.data, data.batch_size) for key, data in train_cfg.train_data.items()
+        ]
+    else:
+        train_items = [("train", train_cfg.data, train_cfg.batch_size)]
 
-    full_dataset = create_dataset(
-        train_cfg.data,
-        train_cfg.policy,
-        add_noise=add_noise,
-    )
+    for name, data_cfg, batch_size in train_items:
+        data_cfg.action_horizon = train_cfg.policy.action_horizon
+        data_cfg.state_history = train_cfg.policy.state_history
 
-    dataloader = _create_dataloader(
-        dataset=full_dataset,
-        shuffle=True,
-        batch_size=train_cfg.batch_size,
-        train_cfg=train_cfg,
-        world_size=world_size,
-        global_rank=global_rank,
-    )
+        dataset = create_dataset(
+            data_cfg,
+            train_cfg.policy,
+            add_noise=add_noise,
+        )
+        train_loaders[name] = _create_dataloader(
+            dataset=dataset,
+            shuffle=True,
+            batch_size=batch_size,
+            train_cfg=train_cfg,
+            world_size=world_size,
+            global_rank=global_rank,
+        )
 
     eval_loaders: Dict[str, Tuple[DataLoader, str]] = {}
 
@@ -195,10 +208,7 @@ def create_dataloaders(
         )
         eval_loaders[name] = (eval_loader, eval_cfg.eval_type)
 
-    return (
-        dataloader,
-        eval_loaders,
-    )
+    return train_loaders, eval_loaders
 
 
 def build_param_lr_groups(
@@ -454,3 +464,111 @@ def log_model_state_sizes(
         f"optim_state[{_format_dtype_bytes(optim_dtype_bytes)}]"
     )
     print_with_rank(msg)
+
+
+class PrefetchingEpochIterator(Iterator[Iterator]):
+    """Prefetch the next epoch's first batch while the current epoch runs."""
+
+    def __init__(
+        self,
+        # iterator_fn: Callable[[int], Iterator],
+        dataloader: DataLoader,
+        num_epochs: int,
+        *,
+        max_workers: int = 1,
+    ):
+        # self.iterator_fn = iterator_fn
+        self.dataloader = dataloader
+        self.num_epochs = num_epochs
+        self.epoch_idx = 0
+        self.current_iter: Optional[Iterator] = None
+
+        self.executor = ThreadPoolExecutor(max_workers=max_workers)
+        self.prefetched_iter: Optional[Iterator] = None
+
+        self._submit_prefetch(0)
+
+    def __iter__(self) -> "PrefetchingEpochIterator":
+        return self
+
+    def __next__(self) -> Iterator:
+        if self.epoch_idx >= self.num_epochs:
+            raise StopIteration
+
+        self._cleanup_prev_iter()
+
+        prefetched_first_batch = self.prefetch_batch_future.result()
+        self.current_iter = self.prefetched_iter
+
+        next_epoch = self.epoch_idx + 1
+        self._submit_prefetch(next_epoch)
+        self.epoch_idx += 1
+
+        return itertools.chain((prefetched_first_batch,), self.current_iter)
+
+    def _submit_prefetch(self, epoch_idx: int):
+        if epoch_idx >= self.num_epochs:
+            return
+        dataloader = copy.copy(self.dataloader)
+        if isinstance(dataloader.sampler, DistributedSampler):
+            dataloader.sampler.set_epoch(epoch_idx)
+        self.prefetched_iter = iter(dataloader)
+        # return self.executor.submit(
+        #     lambda: next(self.prefetched_iter),
+        # )
+        self.prefetch_batch_future = self.executor.submit(
+            lambda iter: next(iter),
+            self.prefetched_iter,
+        )
+
+    def _cleanup_prev_iter(self, final=False) -> None:
+        if self.dataloader.persistent_workers and not final:
+            # do not shutdown workers if persistent
+            return
+        if self.current_iter is not None and hasattr(self.current_iter, "_shutdown_workers"):
+            self.current_iter._shutdown_workers()  # type: ignore[attr-defined]
+        self.current_iter = None
+
+    def finalize(self) -> None:
+        self._cleanup_prev_iter()
+
+
+class EagerEpochIterator(Iterator[Iterator]):
+    """Create a fresh iterator each epoch without prefetching."""
+
+    def __init__(
+        self,
+        dataloader: DataLoader,
+        num_epochs: int,
+    ):
+        self.dataloader = dataloader
+        self.num_epochs = num_epochs
+        self.epoch_idx = 0
+        self.current_iter: Optional[Iterator] = None
+
+    def __iter__(self) -> "EagerEpochIterator":
+        return self
+
+    def __next__(self) -> Iterator:
+        if self.epoch_idx >= self.num_epochs:
+            raise StopIteration
+
+        self._cleanup_prev_iter()
+        dataloader = self.dataloader
+        if isinstance(dataloader.sampler, DistributedSampler):
+            dataloader.sampler.set_epoch(self.epoch_idx)
+        iterator = iter(dataloader)
+        self.current_iter = iterator
+        self.epoch_idx += 1
+        return iterator
+
+    def _cleanup_prev_iter(self, final=False) -> None:
+        if self.dataloader.persistent_workers and not final:
+            # do not shutdown workers if persistent
+            return
+        if self.current_iter is not None and hasattr(self.current_iter, "_shutdown_workers"):
+            self.current_iter._shutdown_workers()  # type: ignore[attr-defined]
+        self.current_iter = None
+
+    def finalize(self) -> None:
+        self._cleanup_prev_iter()

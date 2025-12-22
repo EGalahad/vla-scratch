@@ -100,11 +100,13 @@ class Normalize(torch.nn.Module):
                 if self.strict:
                     raise KeyError(f"Missing key '{key}' for normalization")
                 continue
-            normalized = self._fn(sample[key], stats)
-            if self.enable_aug:
-                sample[key] = self._apply_noise(key, normalized)
+            if (val := sample[key]) is not None:
+                normalized = self._fn(val, stats)
+                if self.enable_aug:
+                    normalized = self._apply_noise(key, normalized)
             else:
-                sample[key] = normalized
+                normalized = None
+            sample[key] = normalized
         return sample
 
     @staticmethod

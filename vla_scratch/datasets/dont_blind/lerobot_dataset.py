@@ -219,7 +219,7 @@ class DontBlindDataset(torch.utils.data.Dataset):
         processed = {
             PROCESSED_IMAGE_KEY: (img * 255).to(torch.uint8).unsqueeze(0),
             PROCESSED_IMAGE_MASK_KEY: torch.ones((1, 1), dtype=torch.bool),
-            PROCESSED_ACTION_KEY: actions,
+            PROCESSED_ACTION_KEY: actions if not self.bbox_only else None,
             PROCESSED_STATE_KEY: torch.randn((state_len, 1), dtype=torch.float32),
             TASK_KEY: item.get("task"),
             GENERATION_PROMPT_KEY: prompt,

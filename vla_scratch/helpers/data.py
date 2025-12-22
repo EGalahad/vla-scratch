@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-import copy
-import itertools
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Iterator, List, Optional, Sequence, TYPE_CHECKING
+from typing import Any, List, Sequence, TYPE_CHECKING
 from omegaconf import DictConfig
-
-from torch.utils.data import DataLoader, DistributedSampler
 
 from vla_scratch.transforms.base import TransformedDataset
 from vla_scratch.transforms.common import ToDataSample
@@ -99,6 +94,7 @@ def create_dataset(
     add_noise: bool = False,
 ) -> TransformedDataset:
     """Create a dataset pipeline applying configured transforms."""
+    # Eval-specific fields on EvalDatasetCfg are ignored here.
     input_tfs = data_cfg.input_transforms
     output_tfs = data_cfg.output_transforms
     dataset_tfs = make_transforms(list(input_tfs) + list(output_tfs))
@@ -123,110 +119,3 @@ def create_dataset(
     base_dataset = data_cfg.instantiate()
     return TransformedDataset(base_dataset, pipeline)
 
-
-class PrefetchingEpochIterator(Iterator[Iterator]):
-    """Prefetch the next epoch's first batch while the current epoch runs."""
-
-    def __init__(
-        self,
-        # iterator_fn: Callable[[int], Iterator],
-        dataloader: DataLoader,
-        num_epochs: int,
-        *,
-        max_workers: int = 1,
-    ):
-        # self.iterator_fn = iterator_fn
-        self.dataloader = dataloader
-        self.num_epochs = num_epochs
-        self.epoch_idx = 0
-        self.current_iter: Optional[Iterator] = None
-
-        self.executor = ThreadPoolExecutor(max_workers=max_workers)
-        self.prefetched_iter: Optional[Iterator] = None
-
-        self._submit_prefetch(0)
-
-    def __iter__(self) -> "PrefetchingEpochIterator":
-        return self
-
-    def __next__(self) -> Iterator:
-        if self.epoch_idx >= self.num_epochs:
-            raise StopIteration
-
-        self._cleanup_prev_iter()
-
-        prefetched_first_batch = self.prefetch_batch_future.result()
-        self.current_iter = self.prefetched_iter
-
-        next_epoch = self.epoch_idx + 1
-        self._submit_prefetch(next_epoch)
-        self.epoch_idx += 1
-
-        return itertools.chain((prefetched_first_batch,), self.current_iter)
-
-    def _submit_prefetch(self, epoch_idx: int):
-        if epoch_idx >= self.num_epochs:
-            return
-        dataloader = copy.copy(self.dataloader)
-        if isinstance(dataloader.sampler, DistributedSampler):
-            dataloader.sampler.set_epoch(epoch_idx)
-        self.prefetched_iter = iter(dataloader)
-        # return self.executor.submit(
-        #     lambda: next(self.prefetched_iter),
-        # )
-        self.prefetch_batch_future = self.executor.submit(
-            lambda iter: next(iter),
-            self.prefetched_iter,
-        )
-
-    def _cleanup_prev_iter(self, final=False) -> None:
-        if self.dataloader.persistent_workers and not final:
-            # do not shutdown workers if persistent
-            return
-        if self.current_iter is not None and hasattr(self.current_iter, "_shutdown_workers"):
-            self.current_iter._shutdown_workers()  # type: ignore[attr-defined]
-        self.current_iter = None
-
-    def finalize(self) -> None:
-        self._cleanup_prev_iter()
-
-
-class EagerEpochIterator(Iterator[Iterator]):
-    """Create a fresh iterator each epoch without prefetching."""
-
-    def __init__(
-        self,
-        dataloader: DataLoader,
-        num_epochs: int,
-    ):
-        self.dataloader = dataloader
-        self.num_epochs = num_epochs
-        self.epoch_idx = 0
-        self.current_iter: Optional[Iterator] = None
-
-    def __iter__(self) -> "EagerEpochIterator":
-        return self
-
-    def __next__(self) -> Iterator:
-        if self.epoch_idx >= self.num_epochs:
-            raise StopIteration
-
-        self._cleanup_prev_iter()
-        dataloader = self.dataloader
-        if isinstance(dataloader.sampler, DistributedSampler):
-            dataloader.sampler.set_epoch(self.epoch_idx)
-        iterator = iter(dataloader)
-        self.current_iter = iterator
-        self.epoch_idx += 1
-        return iterator
-
-    def _cleanup_prev_iter(self, final=False) -> None:
-        if self.dataloader.persistent_workers and not final:
-            # do not shutdown workers if persistent
-            return
-        if self.current_iter is not None and hasattr(self.current_iter, "_shutdown_workers"):
-            self.current_iter._shutdown_workers()  # type: ignore[attr-defined]
-        self.current_iter = None
-
-    def finalize(self) -> None:
-        self._cleanup_prev_iter()

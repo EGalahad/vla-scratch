@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Tuple, TYPE_CHECKING, Optional
+from typing import List, Tuple, TYPE_CHECKING, Optional, Dict
 
 import torch
 import torch.nn as nn
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
         PrefixPadMask,
         KVCache,
     )
-    from vla_scratch.transforms.data_types import Observation
+    from vla_scratch.transforms.data_types import Observation, DataSample
 
 
 class BasePolicy(nn.Module, ABC):
@@ -52,6 +52,13 @@ class BasePolicy(nn.Module, ABC):
         num_steps: int,
     ) -> torch.Tensor:
         """Sample actions in evaluation/serving mode."""
+        
+    @abstractmethod
+    def compute_loss(
+        self,
+        data_sample: "DataSample",
+    ) -> Tuple[torch.Tensor, Dict]:
+        """Compute training loss between predicted and target actions."""
 
     def apply_fsdp(self, *args, **kwargs) -> None:  # pragma: no cover - optional hook
         """Optional shard hook for policies that support FSDP."""

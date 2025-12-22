@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Any, Iterator, List, Optional
 from collections.abc import MutableMapping
 
+from omegaconf import MISSING
+
 from vla_scratch.utils.config import locate_class
 
 
@@ -32,6 +34,12 @@ class EvalDatasetCfg:
 
 
 @dataclass
+class TrainDatasetCfg:
+    data: DataConfig
+    batch_size: int = MISSING
+
+
+@dataclass
 class EvalDataCfg(MutableMapping[str, EvalDatasetCfg]):
     datasets: dict[str, EvalDatasetCfg] = field(default_factory=dict)
 
@@ -53,6 +61,31 @@ class EvalDataCfg(MutableMapping[str, EvalDatasetCfg]):
     def __bool__(self) -> bool:
         return bool(self.datasets)
 
+
+@dataclass
+class TrainDataCfg(MutableMapping[str, TrainDatasetCfg]):
+    datasets: dict[str, TrainDatasetCfg] = field(default_factory=dict)
+
+    def __getitem__(self, key: str) -> TrainDatasetCfg:
+        return self.datasets[key]
+
+    def __setitem__(self, key: str, value: TrainDatasetCfg) -> None:
+        self.datasets[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        del self.datasets[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.datasets)
+
+    def __len__(self) -> int:
+        return len(self.datasets)
+
+    def __bool__(self) -> bool:
+        return bool(self.datasets)
+
+
 from hydra.core.config_store import ConfigStore
 cs = ConfigStore.instance()
+cs.store(name="none", node=TrainDataCfg(), group="train_data")
 cs.store(name="none", node=EvalDataCfg(), group="eval_data")

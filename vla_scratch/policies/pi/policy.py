@@ -289,46 +289,53 @@ class PiPolicy(BasePolicy):
         )
         torch.cuda.nvtx.range_pop()
 
-        suffix_input = self.construct_suffix_input(vlm_outputs)
-        if self.config.detach_kv_cache:
-            torch.cuda.nvtx.range_push("Detach KV Cache")
-            suffix_input = suffix_input.detach()
+        if data_sample.action_chunk is not None:
+            suffix_input = self.construct_suffix_input(vlm_outputs)
+            if self.config.detach_kv_cache:
+                torch.cuda.nvtx.range_push("Detach KV Cache")
+                suffix_input = suffix_input.detach()
+                torch.cuda.nvtx.range_pop()
+
+            torch.cuda.nvtx.range_push("Noise Sampling")
+            actions = data_sample.action_chunk.actions
+            selected_noise = sample_topk_noise(
+                actions,
+                self.config.num_noise_before_topk,
+                self.config.num_noise_per_sample,
+                device=actions.device,
+            )
             torch.cuda.nvtx.range_pop()
 
-        torch.cuda.nvtx.range_push("Noise Sampling")
-        actions = data_sample.action_chunk.actions
-        selected_noise = sample_topk_noise(
-            actions,
-            self.config.num_noise_before_topk,
-            self.config.num_noise_per_sample,
-            device=actions.device,
-        )
-        torch.cuda.nvtx.range_pop()
+            torch.cuda.nvtx.range_push("Expand Data Sample")
+            data_sample = repeat_batch(data_sample, self.config.num_noise_per_sample)
+            suffix_input = repeat_batch(suffix_input, self.config.num_noise_per_sample)
+            torch.cuda.nvtx.range_pop()
 
-        torch.cuda.nvtx.range_push("Expand Data Sample")
-        data_sample = repeat_batch(data_sample, self.config.num_noise_per_sample)
-        suffix_input = repeat_batch(suffix_input, self.config.num_noise_per_sample)
-        torch.cuda.nvtx.range_pop()
+            torch.cuda.nvtx.range_push("Apply Noise")
+            actions = data_sample.action_chunk.actions
+            u_t = selected_noise - actions
+            timestep = sample_clamped_time(self.time_dist, data_sample.shape)
+            noisy_actions = actions + timestep[:, None, None] * u_t
+            torch.cuda.nvtx.range_pop()
 
-        torch.cuda.nvtx.range_push("Apply Noise")
-        actions = data_sample.action_chunk.actions
-        u_t = selected_noise - actions
-        timestep = sample_clamped_time(self.time_dist, data_sample.shape)
-        noisy_actions = actions + timestep[:, None, None] * u_t
-        torch.cuda.nvtx.range_pop()
+            torch.cuda.nvtx.range_push("Model Predict Suffix")
+            disp_loss, v_t, log_dict_suffix = self.predict_suffix(
+                state=data_sample.observation.state,
+                suffix_input=suffix_input,
+                noisy_actions=noisy_actions,
+                time=timestep,
+            )
+            torch.cuda.nvtx.range_pop()
 
-        torch.cuda.nvtx.range_push("Model Predict Suffix")
-        disp_loss, v_t, log_dict_suffix = self.predict_suffix(
-            state=data_sample.observation.state,
-            suffix_input=suffix_input,
-            noisy_actions=noisy_actions,
-            time=timestep,
-        )
-        torch.cuda.nvtx.range_pop()
+            flow_mse = torch.nn.functional.mse_loss(
+                u_t.to(v_t.dtype), v_t, reduction="none"
+            ).mean()
+            log_dict_suffix["loss/flow_mse"] = flow_mse.detach()
+        else:
+            flow_mse = 0.0
+            disp_loss = 0.0
+            log_dict_suffix = {}
 
-        flow_mse = torch.nn.functional.mse_loss(
-            u_t.to(v_t.dtype), v_t, reduction="none"
-        ).mean()
         loss = (
             flow_mse
             + self.config.ce_loss_weight * ce_loss
@@ -336,7 +343,6 @@ class PiPolicy(BasePolicy):
         )
 
         log_dict = {**log_dict_prefix, **log_dict_suffix}
-        log_dict["loss/flow_mse"] = flow_mse.detach()
 
         return loss, log_dict
 
