@@ -1,8 +1,12 @@
 from dataclasses import replace
-
 from hydra.core.config_store import ConfigStore
 
-from vla_scratch.datasets.config import EvalDataCfg, EvalDatasetCfg, TrainDataCfg, TrainDatasetCfg
+from vla_scratch.datasets.config import (
+    EvalDataCfg,
+    EvalDatasetCfg,
+    TrainDataCfg,
+    TrainDatasetCfg,
+)
 from vla_scratch.datasets.dont_blind.config import (
     default_dont_blind_config,
     dont_blind_8_8_objects_config_train,

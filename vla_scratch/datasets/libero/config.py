@@ -23,6 +23,22 @@ class LiberoIPECConfig(DataConfig):
         "normalization_stats/libero/IPEC-COMMUNITY/libero-horizon_{data.action_horizon}-history_{data.state_history}.npz"
     )
 
+    input_transforms: List[dict] = field(
+        default_factory=lambda: [
+            {"_target_": "vla_scratch.datasets.libero.transforms.LiberoGlobalState"},
+            {"_target_": "vla_scratch.datasets.libero.transforms.LiberoImages"},
+        ]
+    )
+    output_transforms: List[dict] = field(
+        default_factory=lambda: [
+            {"_target_": "vla_scratch.datasets.libero.transforms.LiberoActionToLocal"},
+        ]
+    )
+    output_inv_transforms: List[dict] = field(
+        default_factory=lambda: [
+            {"_target_": "vla_scratch.datasets.libero.transforms.LiberoActionToGlobal"},
+        ]
+    )
 
 default_libero_config = LiberoIPECConfig(
     repo_id=[
@@ -32,23 +48,13 @@ default_libero_config = LiberoIPECConfig(
         # "IPEC-COMMUNITY/libero_10_no_noops_1.0.0_lerobot",
         # "IPEC-COMMUNITY/libero_90_no_noops_1.0.0_lerobot",
     ],
-    input_transforms=[
-        {"_target_": "vla_scratch.datasets.libero.transforms.LiberoGlobalState"},
-        {"_target_": "vla_scratch.datasets.libero.transforms.LiberoImages"},
-    ],
-    output_transforms=[
-        {"_target_": "vla_scratch.datasets.libero.transforms.LiberoActionToLocal"},
-    ],
-    output_inv_transforms=[
-        {"_target_": "vla_scratch.datasets.libero.transforms.LiberoActionToGlobal"},
-    ],
 )
-libero_spatial_config = deepcopy(default_libero_config)
-libero_spatial_config.repo_id = ["IPEC-COMMUNITY/libero_spatial_no_noops_1.0.0_lerobot"]
-libero_spatial_config.norm_stats_path = "normalization_stats/libero/IPEC-COMMUNITY/libero_spatial-horizon_{data.action_horizon}-history_{data.state_history}.npz"
+libero_ipec_spatial_config = deepcopy(default_libero_config)
+libero_ipec_spatial_config.repo_id = ["IPEC-COMMUNITY/libero_spatial_no_noops_1.0.0_lerobot"]
+libero_ipec_spatial_config.norm_stats_path = "normalization_stats/libero/IPEC-COMMUNITY/libero_spatial-horizon_{data.action_horizon}-history_{data.state_history}.npz"
 
-libero_spatial_noised_config = deepcopy(libero_spatial_config)
-libero_spatial_noised_config.noise_cfg = {
+libero_ipec_spatial_noised_config = deepcopy(libero_ipec_spatial_config)
+libero_ipec_spatial_noised_config.noise_cfg = {
     PROCESSED_STATE_KEY: {
         # pos
         "0-3": {
@@ -68,58 +74,38 @@ libero_spatial_noised_config.noise_cfg = {
     }
 }
 
-# libero_spatial_delta_action_config = deepcopy(libero_spatial_config)
-# libero_spatial_delta_action_config.output_transforms = []
-# libero_spatial_delta_action_config.output_inv_transforms = []
-
-
-# @dataclass
-# class LiberoElijahConfig(DataConfig):
-#     _target_: str = "vla_scratch.datasets.libero.lerobot_elijah.ElijahDataset"
-#     repo_id: List[str] = field(
-#         default_factory=lambda: [
-#             "elijahgalahad/libero_spatial_noops_v21",
-#         ]
-#     )
-#     norm_stats_path: str = (
-#         "normalization_stats/libero/elijahgalahad/libero-horizon_{data.action_horizon}-history_{data.state_history}.npz"
-#     )
-
-
-# default_libero_elijah_config = LiberoElijahConfig(
-#     input_transforms=[
-#         {"_target_": "vla_scratch.datasets.libero.transforms.LiberoGlobalState"},
-#         {"_target_": "vla_scratch.datasets.libero.transforms.LiberoImages"},
-#     ],
-#     output_transforms=[
-#         {"_target_": "vla_scratch.datasets.libero.transforms.LiberoActionToLocal"},
-#     ],
-#     output_inv_transforms=[
-#         {"_target_": "vla_scratch.datasets.libero.transforms.LiberoActionToGlobal"},
-#     ],
-# )
-
-# libero_elijah_noised_config = deepcopy(default_libero_elijah_config)
-# libero_elijah_noised_config.noise_cfg = {
-#     PROCESSED_STATE_KEY: {
-#         # left pos
-#         "0-3": {
-#             "type": "gaussian",
-#             "std": 0.2,
-#         },
-#         # left rot
-#         "3-9": {
-#             "type": "gaussian",
-#             "std": 0.1,
-#         },
-#     }
-# }
-
 
 cs = ConfigStore.instance()
-cs.store(name="libero-ipec-global", node=default_libero_config, group="data")
-cs.store(name="libero-ipec-spatial", node=libero_spatial_config, group="data")
-cs.store(name="libero-ipec-spatial-noised", node=libero_spatial_noised_config, group="data")
+cs.store(name="libero-ipec-spatial", node=libero_ipec_spatial_config, group="data")
+cs.store(name="libero-ipec-spatial-noised", node=libero_ipec_spatial_noised_config, group="data")
 
-# cs.store(name="libero-elijah", node=default_libero_elijah_config, group="data")
-# cs.store(name="libero-elijah-noised", node=libero_elijah_noised_config, group="data")
+@dataclass
+class LiberoConfig(DataConfig):
+    _target_: str = "vla_scratch.datasets.libero.lerobot_dataset.LIBERODataset"
+    repo_id: List[str] = field(
+        default_factory=lambda: [
+            "elijahgalahad/libero_spatial_noops_v30"
+        ]
+    )
+    norm_stats_path: str = (
+        "normalization_stats/libero/lerobot_dataset-horizon_{data.action_horizon}-history_{data.state_history}.npz"
+    )
+    input_transforms: List[dict] = field(
+        default_factory=lambda: [
+            {"_target_": "vla_scratch.datasets.libero.transforms.LiberoGlobalState"},
+            {"_target_": "vla_scratch.datasets.libero.transforms.LiberoImages"},
+        ]
+    )
+    output_transforms: List[dict] = field(
+        default_factory=lambda: [
+            {"_target_": "vla_scratch.datasets.libero.transforms.LiberoActionToLocal"},
+        ]
+    )
+    output_inv_transforms: List[dict] = field(
+        default_factory=lambda: [
+            {"_target_": "vla_scratch.datasets.libero.transforms.LiberoActionToGlobal"},
+        ]
+    )
+
+libero_spatial_config = LiberoConfig()
+cs.store(name="libero-spatial", node=libero_spatial_config, group="data")

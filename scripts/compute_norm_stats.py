@@ -51,7 +51,7 @@ class NormStatsConfig:
     # Compute controls
     num_samples: int = 4096
     batch_size: int = 32
-    num_workers: int = 32
+    num_workers: int = 8
     pin_memory: bool = False
 
 

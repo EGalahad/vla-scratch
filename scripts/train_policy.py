@@ -11,9 +11,8 @@ from setproctitle import setproctitle
 
 import torch
 import torch.distributed as dist
-from torch.distributed.tensor import DTensor
-from torch.distributed.fsdp._fully_shard import FSDPModule
 from torch.optim.lr_scheduler import CosineAnnealingLR
+torch._dynamo.config.recompile_limit = 64
 
 from tensordict import TensorDict
 
@@ -22,17 +21,8 @@ from hydra.core.config_store import ConfigStore
 from hydra.conf import HydraConf, JobConf, RunDir
 from omegaconf import DictConfig, OmegaConf, MISSING
 
-if TYPE_CHECKING:
-    from vla_scratch.transforms.data_types import DataSample
-
-from vla_scratch.policies.base import BasePolicy
 from vla_scratch.policies.config import PolicyConfig
-from vla_scratch.datasets.config import DataConfig, EvalDataCfg
-
-from vla_scratch.helpers.data import (
-    EagerEpochIterator,
-    PrefetchingEpochIterator,
-)
+from vla_scratch.datasets.config import DataConfig, EvalDataCfg, TrainDataCfg
 
 from vla_scratch.helpers.training import (
     aggregate_tensordict,
@@ -43,6 +33,8 @@ from vla_scratch.helpers.training import (
     log_model_state_sizes,
     print_with_rank,
     setup_dist,
+    EagerEpochIterator,
+    PrefetchingEpochIterator,
 )
 
 from vla_scratch.utils.checkpoint import (
@@ -51,6 +43,13 @@ from vla_scratch.utils.checkpoint import (
     save_checkpoint,
 )
 from vla_scratch.utils.config import save_train_config
+
+
+if TYPE_CHECKING:
+    from vla_scratch.transforms.data_types import DataSample
+    from torch.distributed.tensor import DTensor
+    from vla_scratch.policies.base import BasePolicy
+    from torch.distributed.fsdp._fully_shard import FSDPModule
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -71,15 +70,16 @@ class TrainConfig:
             "_self_",
             {"policy": "pi-qwen"},
             {"data": "libero-ipec"},
+            {"train_data": "none"},
             {"eval_data": "none"},
         ]
     )
 
     # data loader
-    num_workers: int = 8
-    prefetch_factor: int = 6
+    num_workers: int = 4
+    prefetch_factor: int = 2
     split_seed: int = 42
-    epoch_iterator: str = "prefetch"  # "prefetch" or "eager"
+    epoch_iterator: str = "eager"  # "prefetch" or "eager"
     # optimization
     epochs: int = 20
     batch_size: int = 16
@@ -107,7 +107,9 @@ class TrainConfig:
 
     # data
     data: DataConfig = MISSING
+    train_data: TrainDataCfg = field(default_factory=TrainDataCfg)
     eval_data: EvalDataCfg = field(default_factory=EvalDataCfg)
+    # eval_data datasets are DataConfig entries with eval_fraction/eval_type overrides.
     eval_num_sample_steps: int = 10
     eval_batch_size: int = 32
 
@@ -134,7 +136,7 @@ class TrainConfig:
 cs = ConfigStore.instance()
 cs.store(name="train", node=TrainConfig())
 
-
+import vla_scratch.configs
 @hydra.main(config_name="train", version_base=None)
 def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
@@ -172,7 +174,7 @@ def main(cfg: DictConfig) -> None:
     cfg.world_size = world_size
 
     print_with_rank("create dataloaders...")
-    dataloader, eval_loaders = create_dataloaders(
+    train_loaders, eval_loaders = create_dataloaders(
         train_cfg,
         world_size,
         global_rank,
@@ -180,7 +182,8 @@ def main(cfg: DictConfig) -> None:
     )
 
     try:
-        dummy_data, _ = next(iter(dataloader))
+        first_loader = next(iter(train_loaders.values()))
+        dummy_data, _ = next(iter(first_loader))
     except RuntimeError as e:
         print("If you see input ids shape incompatible errors here, please increase the max_length in processor config in vla_scratch/policies/pi/config.py!")
         raise e
@@ -190,33 +193,33 @@ def main(cfg: DictConfig) -> None:
 
     print_with_rank("create model...")
     with torch.device(device):
-        model: BasePolicy = train_cfg.policy.instantiate()
+        model: "BasePolicy" = train_cfg.policy.instantiate()
 
     # Warmup pass
     print_with_rank("warmup pass...")
     loss, _ = model.compute_loss(dummy_data)
     loss.backward()
 
-    for key, (eval_dataloader, eval_type) in eval_loaders.items():
-        if eval_type == "sample_mse":
-            eval_metrics = eval_sample_mse(
-                model=model,
-                dataloader=eval_dataloader,
-                device=device,
-                num_sample_steps=train_cfg.eval_num_sample_steps,
-                local_rank=local_rank,
-            )
-        elif eval_type == "generation":
-            eval_metrics = eval_generation(
-                model=model,
-                dataloader=eval_dataloader,
-                device=device,
-                local_rank=local_rank,
-            )
-        else:
-            raise ValueError(
-                f"Unsupported eval_type '{eval_type}' for dataset '{key}'."
-            )
+    # for eval_key, (eval_dataloader, eval_type) in eval_loaders.items():
+    #     if eval_type == "sample_mse":
+    #         eval_metrics = eval_sample_mse(
+    #             model=model,
+    #             dataloader=eval_dataloader,
+    #             device=device,
+    #             num_sample_steps=train_cfg.eval_num_sample_steps,
+    #             local_rank=local_rank,
+    #         )
+    #     elif eval_type == "generation":
+    #         eval_metrics = eval_generation(
+    #             model=model,
+    #             dataloader=eval_dataloader,
+    #             device=device,
+    #             local_rank=local_rank,
+    #         )
+    #     else:
+    #         raise ValueError(
+    #             f"Unsupported eval_type '{eval_type}' for dataset '{eval_key}'."
+    #         )
 
     model.initialize_weights()
 
@@ -226,9 +229,16 @@ def main(cfg: DictConfig) -> None:
         output_dtype=torch.float32,
         mesh=mesh,
     )
-    model: "FSDPModule" | BasePolicy
+    model: "FSDPModule" | "BasePolicy"
 
-    global_batch_size = train_cfg.batch_size * train_cfg.grad_accum_steps * world_size
+    if train_cfg.train_data:
+        train_batch_sizes_by_name = {
+            name: cfg.batch_size for name, cfg in train_cfg.train_data.items()
+        }
+    else:
+        train_batch_sizes_by_name = {"train": train_cfg.batch_size}
+    total_batch_size = sum(train_batch_sizes_by_name.values())
+    global_batch_size = total_batch_size * train_cfg.grad_accum_steps * world_size
     lr_cfg = dict(train_cfg.lr)
     param_groups = build_param_lr_groups(model, lr_cfg)
 
@@ -296,7 +306,11 @@ def main(cfg: DictConfig) -> None:
         
     global_step = 0
     scheduler = None
-    steps_per_epoch = max(1, len(dataloader) // train_cfg.grad_accum_steps)
+    steps_per_epoch_by_name = {
+        name: max(1, len(loader) // train_cfg.grad_accum_steps)
+        for name, loader in train_loaders.items()
+    }
+    steps_per_epoch = min(steps_per_epoch_by_name.values())
     last_time = time.perf_counter()
     log_tds = []
 
@@ -308,11 +322,15 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(
             f"Unsupported epoch_iterator '{train_cfg.epoch_iterator}', expected 'eager' or 'prefetch'."
         )
-    epoch_iterator = epoch_iterator_cls(
-        dataloader=dataloader,
-        num_epochs=train_cfg.epochs,
-    )
-    for epoch, data_loader_iter in enumerate(epoch_iterator):
+    epoch_iterators = {
+        name: epoch_iterator_cls(dataloader=loader, num_epochs=train_cfg.epochs)
+        for name, loader in train_loaders.items()
+    }
+    for epoch in range(train_cfg.epochs):
+        data_loader_iters = {
+            name: next(epoch_iterator)
+            for name, epoch_iterator in epoch_iterators.items()
+        }
         # Initialize cosine annealing at the start of the first scheduled epoch
         if (
             scheduler is None
@@ -343,20 +361,27 @@ def main(cfg: DictConfig) -> None:
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.nvtx.range_pop()
 
+            log_td = {}
             for _ in range(train_cfg.grad_accum_steps):
-                torch.cuda.nvtx.range_push("DataLoader")
-                data_sample, perf_dict = next(data_loader_iter)
-                data_sample: "DataSample" = data_sample.to(device, non_blocking=True)
-                perf_dict: TensorDict = perf_dict.to(device, non_blocking=True)
-                torch.cuda.nvtx.range_pop()
+                for train_key, data_loader_iter in data_loader_iters.items():
+                    torch.cuda.nvtx.range_push("DataLoader")
+                    data_sample, perf_dict = next(data_loader_iter)
+                    data_sample: "DataSample" = data_sample.to(device, non_blocking=True)
+                    perf_dict: TensorDict = perf_dict.to(device, non_blocking=True)
+                    torch.cuda.nvtx.range_pop()
 
-                loss, loss_dict = model.compute_loss(data_sample)
-                torch.cuda.nvtx.range_push("Loss Backward")
-                (loss / train_cfg.grad_accum_steps / world_size).backward()
-                torch.cuda.nvtx.range_pop()
+                    loss, log_dict = model.compute_loss(data_sample)
+                    torch.cuda.nvtx.range_push("Loss Backward")
+                    (loss / train_cfg.grad_accum_steps / world_size).backward()
+                    torch.cuda.nvtx.range_pop()
+
+                    log_dict = {f"{key.split('/')[0]}/{train_key}.{key.split('/')[1]}": val for key, val in log_dict.items()}
+                    perf_dict = {f"loading/{train_key}.{key}": val for key, val in perf_dict.mean(dim=0).items()}
+                    log_td.update(log_dict)
+                    log_td.update(perf_dict)
 
             torch.cuda.nvtx.range_push("Optimizer Step")
-            norm_before_clip = torch.nn.utils.clip_grad_norm_(
+            norm_before_clip: "DTensor" = torch.nn.utils.clip_grad_norm_(
                 model.parameters(), max_norm=train_cfg.clip_grad_norm
             )
             # Linear warmup: ramp LR from 0 to base_lr over warmup_steps
@@ -370,13 +395,8 @@ def main(cfg: DictConfig) -> None:
                 scheduler.step()
             torch.cuda.nvtx.range_pop()
 
-            log_td = {}
-            log_td.update(loss_dict)
-            if isinstance(norm_before_clip, DTensor):
-                norm_before_clip = norm_before_clip.full_tensor()
-            log_td["loss/grad_norm"] = norm_before_clip
+            log_td["loss/grad_norm"] = norm_before_clip.full_tensor()
             log_td = TensorDict(log_td, [])
-            log_td["loading"] = perf_dict.mean(dim=0)
 
             log_tds.append(log_td)
 
@@ -385,10 +405,16 @@ def main(cfg: DictConfig) -> None:
             if global_step % train_cfg.log_interval == 0:
                 # log metrics
                 log_dict = {
-                    "epoch": global_step / steps_per_epoch,
                     "step": global_step,
-                    "samples": global_step * global_batch_size,
                 }
+                for train_key, batch_size in train_batch_sizes_by_name.items():
+                    train_global_batch = (
+                        batch_size * train_cfg.grad_accum_steps * world_size
+                    )
+                    log_dict[f"{train_key}.epoch"] = (
+                        global_step / steps_per_epoch_by_name[train_key]
+                    )
+                    log_dict[f"{train_key}.samples"] = global_step * train_global_batch
                 for group in optimizer.param_groups:
                     log_dict[f"lr/{group['name']}"] = group["lr"]
 
@@ -407,7 +433,7 @@ def main(cfg: DictConfig) -> None:
                 if global_step % train_cfg.eval_interval == 0 and len(eval_loaders) > 0:
                     model.eval()
                     model.unshard()
-                    for key, (eval_dataloader, eval_type) in eval_loaders.items():
+                    for eval_key, (eval_dataloader, eval_type) in eval_loaders.items():
                         if eval_type == "sample_mse":
                             eval_metrics = eval_sample_mse(
                                 model=model,
@@ -425,11 +451,11 @@ def main(cfg: DictConfig) -> None:
                             )
                         else:
                             raise ValueError(
-                                f"Unsupported eval_type '{eval_type}' for dataset '{key}'."
+                                f"Unsupported eval_type '{eval_type}' for dataset '{eval_key}'."
                             )
 
                         for metric_name in eval_metrics.keys():
-                            log_td_mean[f"eval/{key}/{metric_name}"] = eval_metrics[metric_name]
+                            log_td_mean[f"eval/{eval_key}.{metric_name}"] = eval_metrics[metric_name]
                     model.reshard()
                     model.train()
 
@@ -449,11 +475,14 @@ def main(cfg: DictConfig) -> None:
                     print(log_string)
                 if global_rank == 0:
                     run.log(log_dict)
+                dist.barrier()
 
         if (epoch + 1) % train_cfg.save_interval == 0:
             save_checkpoint(model, optimizer, global_rank, f"checkpoint_{epoch+1}")
 
-    epoch_iterator.finalize()
+    for epoch_iterator in epoch_iterators.values():
+        if hasattr(epoch_iterator, "finalize"):
+            epoch_iterator.finalize()
     dist.destroy_process_group()
 
 

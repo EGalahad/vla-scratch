@@ -249,5 +249,6 @@ class Qwen3VLBridge(VLMBridge):
             "padding_ratio/min": padding_ratio.min(),
             "padding_ratio/max": padding_ratio.max(),
             "loss/ce_loss": ce_loss.detach(),
+            "loss/accuracy": accuracy.detach(),
         }
         return ce_loss, vlm_outputs, log_dict

@@ -23,6 +23,7 @@ from vla_scratch.transforms.base import TransformFn
 from vla_scratch.helpers.data import (
     build_input_transforms,
     build_output_transforms,
+    create_dataset,
 )
 from vla_scratch.utils.checkpoint import (
     find_latest_checkpoint,
@@ -76,6 +77,52 @@ def _state_tensors_from_obs(obs: Dict[str, Any]) -> Dict[str, torch.Tensor]:
         ARM_STATE_CART_ROT_KEY: _as_tensor(obs[ARM_STATE_CART_ROT_KEY]) if ARM_STATE_CART_ROT_KEY in obs else None,
         GRIPPER_STATE_QPOS_KEY: _as_tensor(obs[GRIPPER_STATE_QPOS_KEY]) if GRIPPER_STATE_QPOS_KEY in obs else None,
     }
+
+
+def _initialize_policy_dims(data_cfg: DataConfig, policy_cfg: PolicyConfig) -> None:
+    data_cfg.action_horizon = policy_cfg.action_horizon
+    data_cfg.state_history = policy_cfg.state_history
+
+    dataset = create_dataset(
+        data_cfg,
+        policy_cfg,
+        skip_norm_stats=False,
+        skip_policy_transforms=True,
+    )
+    if len(dataset) == 0:
+        raise ValueError("Dataset is empty; unable to infer action/state dimensions.")
+
+    data_sample, _ = dataset[0]
+    action_tensor = (
+        data_sample.action_chunk.actions
+        if data_sample.action_chunk is not None
+        else None
+    )
+    if action_tensor is None:
+        raise ValueError("Dataset sample has no actions; unable to infer action_dim.")
+    if data_sample.observation.state is None:
+        raise ValueError("Dataset sample has no state; unable to infer state_dim.")
+
+    action_dim = int(action_tensor.shape[-1])
+    state_dim = int(data_sample.observation.state.shape[-1])
+
+    if policy_cfg.action_dim is None:
+        policy_cfg.action_dim = action_dim
+    elif policy_cfg.action_dim != action_dim:
+        logger.warning(
+            "Policy action_dim=%s differs from dataset action_dim=%s; keeping policy value.",
+            policy_cfg.action_dim,
+            action_dim,
+        )
+
+    if policy_cfg.state_dim is None:
+        policy_cfg.state_dim = state_dim
+    elif policy_cfg.state_dim != state_dim:
+        logger.warning(
+            "Policy state_dim=%s differs from dataset state_dim=%s; keeping policy value.",
+            policy_cfg.state_dim,
+            state_dim,
+        )
 
 
 class ServePolicy:
@@ -161,15 +208,18 @@ def main(cfg: DictConfig) -> None:
 
     # Optionally override fields with saved configs from checkpoint dir
     serve_cfg = cast(ServeConfig, OmegaConf.to_object(cfg))
-    if serve_cfg.checkpoint_path is not None:
-        cfg = merge_cfg_from_checkpoint(cfg, serve_cfg.checkpoint_path)
-    serve_cfg = cast(ServeConfig, OmegaConf.to_object(cfg))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Using device: %s", device)
 
     # Create model from policy config
     print("Initializing model...")
+    for i, spec in enumerate(list(serve_cfg.data.input_transforms or [])):
+        if isinstance(spec, dict) and "enable_aug" in spec:
+            spec.update({"enable_aug": False})
+            serve_cfg.data.input_transforms[i] = spec
+
+    _initialize_policy_dims(serve_cfg.data, serve_cfg.policy)
     with torch.device(device):
         model = create_policy(serve_cfg.policy)
     print("Model initialized.")
@@ -192,14 +242,6 @@ def main(cfg: DictConfig) -> None:
     model.eval()
 
     # Build transforms
-    for i, spec in enumerate(list(serve_cfg.data.input_transforms or [])):
-        if (
-            isinstance(spec, dict)
-            and "enable_aug" in spec
-        ):
-            spec.update({"enable_aug": False})
-            serve_cfg.data.input_transforms[i] = spec
-
     input_transforms = [ToTorch()] + build_input_transforms(serve_cfg.data, serve_cfg.policy)
     output_transforms = build_output_transforms(serve_cfg.data, serve_cfg.policy) + [ToNumpy()]
 

@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import copy
 import itertools
+import hashlib
+import json
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+from collections.abc import Mapping as ABCMapping
 from concurrent.futures import ThreadPoolExecutor
 from torch.utils.data import DataLoader, DistributedSampler
 
@@ -9,6 +14,7 @@ import datetime
 import logging
 import os
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Set, Tuple, Iterator, Optional
+from omegaconf import DictConfig, OmegaConf
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -151,6 +157,36 @@ def _subset_dataset(
     return torch.utils.data.Subset(dataset, indices)
 
 
+def _normalize_cfg_for_hash(value: Any) -> Any:
+    if is_dataclass(value):
+        return _normalize_cfg_for_hash(asdict(value))
+    if isinstance(value, DictConfig):
+        return _normalize_cfg_for_hash(OmegaConf.to_container(value, resolve=True))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, ABCMapping):
+        return {
+            str(key): _normalize_cfg_for_hash(val)
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_normalize_cfg_for_hash(item) for item in value]
+    if isinstance(value, set):
+        return sorted(_normalize_cfg_for_hash(item) for item in value)
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _dataset_cache_key(data_cfg: Any, *, add_noise: bool) -> str:
+    payload = {
+        "data_cfg": _normalize_cfg_for_hash(data_cfg),
+        "add_noise": add_noise,
+    }
+    blob = json.dumps(payload, sort_keys=True)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()
+
+
 def create_dataloaders(
     train_cfg: "TrainConfig",
     world_size: int,
@@ -159,6 +195,7 @@ def create_dataloaders(
     add_noise: bool = False,
 ) -> tuple[dict[str, DataLoader], dict[str, tuple[DataLoader, str]]]:
     train_loaders: Dict[str, DataLoader] = {}
+    dataset_cache: Dict[str, torch.utils.data.Dataset] = {}
     if len(train_cfg.train_data.keys()) > 0:
         train_items = [
             (key, data.data, data.batch_size) for key, data in train_cfg.train_data.items()
@@ -166,15 +203,27 @@ def create_dataloaders(
     else:
         train_items = [("train", train_cfg.data, train_cfg.batch_size)]
 
+    def get_or_create_dataset(
+        data_cfg: Any,
+        *,
+        add_noise: bool,
+    ) -> torch.utils.data.Dataset:
+        key = _dataset_cache_key(data_cfg, add_noise=add_noise)
+        dataset = dataset_cache.get(key)
+        if dataset is None:
+            dataset = create_dataset(
+                data_cfg,
+                train_cfg.policy,
+                add_noise=add_noise,
+            )
+            dataset_cache[key] = dataset
+        return dataset
+
     for name, data_cfg, batch_size in train_items:
         data_cfg.action_horizon = train_cfg.policy.action_horizon
         data_cfg.state_history = train_cfg.policy.state_history
 
-        dataset = create_dataset(
-            data_cfg,
-            train_cfg.policy,
-            add_noise=add_noise,
-        )
+        dataset = get_or_create_dataset(data_cfg, add_noise=add_noise)
         train_loaders[name] = _create_dataloader(
             dataset=dataset,
             shuffle=True,
@@ -192,11 +241,7 @@ def create_dataloaders(
         data_cfg.action_horizon = train_cfg.policy.action_horizon
         data_cfg.state_history = train_cfg.policy.state_history
 
-        dataset = create_dataset(
-            data_cfg,
-            train_cfg.policy,
-            add_noise=False,
-        )
+        dataset = get_or_create_dataset(data_cfg, add_noise=False)
         dataset = _subset_dataset(dataset, eval_cfg.eval_fraction, seed=extra_eval_seed + idx)
         eval_loader = _create_dataloader(
             dataset=dataset,

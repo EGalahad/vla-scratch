@@ -36,7 +36,7 @@ dependencies = [
     "jsonlines",
     "matplotlib",
     # the last commit before dataset version 3.0
-    "lerobot @ git+https://github.com/huggingface/lerobot@d602e8169cbad9e93a4a3b3ee1dd8b332af7ebf8",
+    "lerobot @ git+https://github.com/huggingface/lerobot@v0.4.2",
     "torchcodec",
     "accelerate",
     "mujoco",
