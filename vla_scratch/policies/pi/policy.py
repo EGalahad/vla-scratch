@@ -111,6 +111,7 @@ class PiPolicy(BasePolicy):
             self.obs_registers_att_masks = torch.zeros(
                 config.num_obs_registers, dtype=torch.bool
             )
+            self.obs_registers_att_masks[0] = 1 # prevent prefix from attending to registers
         else:
             assert (
                 not config.expert_only_use_register
@@ -167,8 +168,9 @@ class PiPolicy(BasePolicy):
         # nn.init.xavier_uniform_(self.action_out_proj.weight)
         # nn.init.zeros_(self.action_out_proj.bias)
         if self.config.suffix_add_pos_emb:
-            nn.init.normal_(self.position_embedding_state, mean=0.0, std=0.02)
-            nn.init.normal_(self.position_embedding_action, mean=0.0, std=0.02)
+            nn.init.normal_(self.position_embedding_state, mean=0.0, std=self.config.suffix_pos_emb_init_gain)
+            nn.init.normal_(self.position_embedding_action, mean=0.0, std=self.config.suffix_pos_emb_init_gain)
+        nn.init.normal_(self.obs_registers, mean=0.0, std=self.config.obs_register_init_gain)
         self.action_expert.initialize_weights()
 
     def apply_fsdp(self, param_type, reduce_type, output_dtype, mesh):
@@ -216,6 +218,8 @@ class PiPolicy(BasePolicy):
             extra_embs=extra_embs,
             extra_pad_masks=extra_pad,
             extra_att_masks=extra_att,
+            zero_pos_id_for_extra=self.config.zero_pos_id_for_obs_register,
+            extra_attention_mask=self.config.causal_mask_obs_register,
         )
         return ce_loss, vlm_outputs, log_dict
 

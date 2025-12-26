@@ -1,0 +1,20 @@
+[project]
+name = "vla-bbox_cotrain-sim"
+version = "0.0.0"
+description = "bbox_cotrain single-environment client for ZMQ policy serving"
+requires-python = "==3.10.*"
+dependencies = [
+    "torch",
+    "numpy",
+    "gymnasium",
+    "pyzmq",
+    "msgpack",
+    "pillow",
+    "setuptools",
+    "hydra-core",
+]
+
+[tool.uv]
+python-install-mirror = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+index-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+

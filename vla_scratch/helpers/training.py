@@ -282,7 +282,18 @@ def build_param_lr_groups(
             )
             continue
 
-        params = [p for p in module.parameters() if p.requires_grad]
+        if hasattr(module, "parameters"):
+            params = [p for p in module.parameters() if p.requires_grad]
+        elif isinstance(module, torch.nn.Parameter):
+            params = [module] if module.requires_grad else []
+        elif torch.is_tensor(module):
+            params = [module] if module.requires_grad else []
+        else:
+            logger.warning(
+                "Learning rate config references unsupported module path '%s'; skipping.",
+                module_path,
+            )
+            continue
         if not params:
             continue
 

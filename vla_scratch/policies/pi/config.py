@@ -37,6 +37,11 @@ class PiConfig(PolicyConfig):
     time_dist_alpha: float = 1.0
     time_dist_beta: float = 1.5
 
+    obs_register_init_gain: float = 0.02
+    suffix_pos_emb_init_gain: float = 0.02
+    zero_pos_id_for_obs_register: bool = True
+    causal_mask_obs_register: bool = True
+    
     # already the best setting, only reserved for perf ablation
     qwen3_vl_use_grid_thw_list: bool = True
     qwen3_vl_recompute_pos_ids: bool = False

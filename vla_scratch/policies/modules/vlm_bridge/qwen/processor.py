@@ -16,6 +16,7 @@ class QwenPolicyInput(TensorClass):
     input_ids: torch.LongTensor
     target_ids: torch.LongTensor
     attention_mask: torch.BoolTensor
+    obs_register_att_mask: torch.BoolTensor
     pixel_values: torch.FloatTensor
     image_grid_thw: torch.LongTensor
     image_grid_thw_list: List[Tuple[int, int, int]]
@@ -45,12 +46,15 @@ class QwenProcessor(TransformFn):
         self.assistant_header_ids = tokenizer.encode(
             "assistant\n", add_special_tokens=False
         )
+        self.prompt_sep_text = "<<<PROMPT_SEP>>>"
+        self.prompt_sep_ids = tokenizer.encode(self.prompt_sep_text, add_special_tokens=False)
 
     def compute(self, sample: "DataSample") -> "DataSample":
         user_content: List[Dict] = [
             {"type": "image", "image": img} for img in sample.observation.images
         ]
         user_content.append({"type": "text", "text": sample.observation.task})
+        user_content.append({"type": "text", "text": self.prompt_sep_text})
         user_content.append(
             {"type": "text", "text": sample.observation.generation_prompt}
         )
@@ -84,9 +88,16 @@ class QwenProcessor(TransformFn):
         # target_ids = -100 for non-assistant content tokens, input_ids otherwise
         target_ids = encoded["input_ids"].clone()  # shape: [1, self.max_length]
         target_ids[~assistant_mask] = TARGET_IGNORE_ID
-        # For debug
+        # # For debug
         # target_ids[~assistant_mask] = 0
         # self.processor.batch_decode(target_ids, skip_special_tokens=False)
+        # breakpoint()
+
+        obs_register_att_mask = self._build_obs_register_att_mask(encoded)
+        # # For debug
+        # obs_register_ids = encoded["input_ids"].clone()
+        # obs_register_ids[~obs_register_att_mask] = 0
+        # self.processor.batch_decode(obs_register_ids, skip_special_tokens=False)
         # breakpoint()
 
         position_ids, mrope_position_deltas = self.get_rope_index(
@@ -99,6 +110,7 @@ class QwenProcessor(TransformFn):
             input_ids=encoded["input_ids"].squeeze(0).long(),
             target_ids=target_ids.squeeze(0).long(),
             attention_mask=encoded["attention_mask"].squeeze(0).bool(),
+            obs_register_att_mask=obs_register_att_mask.squeeze(0).bool(),
             pixel_values=encoded["pixel_values"],
             image_grid_thw=encoded["image_grid_thw"],
             image_grid_thw_list=[
@@ -110,6 +122,33 @@ class QwenProcessor(TransformFn):
         sample.observation.policy_input = policy_td
 
         return sample
+
+    def _build_obs_register_att_mask(self, encoded: dict) -> torch.BoolTensor:
+        input_ids = encoded["input_ids"]
+        attention_mask = encoded["attention_mask"]
+
+        bsz, seqlen = input_ids.shape
+        mask = torch.zeros((bsz, seqlen), dtype=torch.bool, device=input_ids.device)
+        for b in range(bsz):
+            sep_start = self._find_subsequence(
+                input_ids[b].tolist(), self.prompt_sep_ids
+            )
+            if sep_start is None:
+                mask[b] = attention_mask[b].bool()
+            else:
+                mask[b, :sep_start] = attention_mask[b, :sep_start].bool()
+
+        return mask
+
+    @staticmethod
+    def _find_subsequence(sequence: list[int], subsequence: list[int]) -> Optional[int]:
+        if not subsequence:
+            return None
+        max_start = len(sequence) - len(subsequence)
+        for i in range(max_start + 1):
+            if sequence[i : i + len(subsequence)] == subsequence:
+                return i
+        return None
 
     @staticmethod
     def assistant_content_mask(

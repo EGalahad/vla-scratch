@@ -53,8 +53,8 @@ test_eval_cfg = EvalDataCfg(
         ),
     }
 )
-cs.store(name="cotrain_eval", node=cotrain_eval_cfg, group="eval_data")
-cs.store(name="test_eval", node=test_eval_cfg, group="eval_data")
+cs.store(name="bbox_cotrain_eval", node=cotrain_eval_cfg, group="eval_data")
+cs.store(name="bbox_test_eval", node=test_eval_cfg, group="eval_data")
 
 cotrain_mix_cfg = TrainDataCfg(
     datasets={
@@ -68,4 +68,14 @@ cotrain_mix_cfg = TrainDataCfg(
         ),
     }
 )
-cs.store(name="cotrain_mix", node=cotrain_mix_cfg, group="train_data")
+cotrain_baseline_cfg = TrainDataCfg(
+    datasets={
+        "action_a": TrainDatasetCfg(
+            data=train_cotrain_config,
+            batch_size=16,
+        ),
+    }
+)
+
+cs.store(name="bbox_cotrain_mix", node=cotrain_mix_cfg, group="train_data")
+cs.store(name="bbox_cotrain_baseline", node=cotrain_baseline_cfg, group="train_data")

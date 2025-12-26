@@ -239,26 +239,17 @@ def main(cfg: DictConfig) -> None:
         train_batch_sizes_by_name = {"train": train_cfg.batch_size}
     total_batch_size = sum(train_batch_sizes_by_name.values())
     global_batch_size = total_batch_size * train_cfg.grad_accum_steps * world_size
+
     lr_cfg = dict(train_cfg.lr)
     param_groups = build_param_lr_groups(model, lr_cfg)
-
-    # Scale learning rates by sqrt(batch) while preserving per-group ratios
-    lr_scale = np.sqrt(global_batch_size)
-    base_lr_dict = {name: float(value) * lr_scale for name, value in lr_cfg.items()}
-
     for group in param_groups:
-        target_lr = base_lr_dict[group["name"]]
-        group["lr"] = target_lr
-        group["initial_lr"] = target_lr
+        group["initial_lr"] = group["lr"]
 
-    base_lr = base_lr_dict["base"]
-    betas = tuple(np.pow(beta, global_batch_size) for beta in train_cfg.betas)
-    eps = train_cfg.eps / np.sqrt(global_batch_size)
     optimizer = torch.optim.AdamW(
         param_groups,
-        lr=base_lr,
-        betas=betas,
-        eps=eps,
+        lr=lr_cfg["base"],
+        betas=train_cfg.betas,
+        eps=train_cfg.eps,
         weight_decay=train_cfg.weight_decay,
         foreach=False,
         fused=True,

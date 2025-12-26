@@ -117,7 +117,7 @@ class DiTConfig:
     cross_attention_every: int = 2
     qk_norm: Optional[str] = "layernorm"
     rotary_self_attn: bool = True
-    only_attend_to_final_layer: bool = False
+    only_attend_to_final_layer: bool = True
 
     attn_dropout: float = 0.0
     mlp_dropout: float = 0.0

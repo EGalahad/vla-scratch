@@ -75,6 +75,8 @@ class Qwen3VLBridge(VLMBridge):
         extra_embs: Optional[torch.Tensor] = None,
         extra_pad_masks: Optional[torch.Tensor] = None,
         extra_att_masks: Optional[torch.Tensor] = None,
+        zero_pos_id_for_extra: bool = False,
+        extra_attention_mask: bool = False,
     ) -> Tuple[torch.Tensor, VLMOutputs, Dict]:
         device = observation.device
         bsz = observation.shape[0]
@@ -151,6 +153,8 @@ class Qwen3VLBridge(VLMBridge):
             ).unsqueeze(0)
             extra_text_pos = last_pos.unsqueeze(1) + increments
             extra_pos_3d = extra_text_pos.unsqueeze(0).expand(3, -1, -1)
+            if zero_pos_id_for_extra:
+                extra_pos_3d.zero_()
             position_ids = torch.cat([position_ids, extra_pos_3d], dim=-1)
 
             extra_visual = torch.zeros(
@@ -166,6 +170,14 @@ class Qwen3VLBridge(VLMBridge):
         torch.cuda.nvtx.range_push("build_attn_mask")
         prefix_att_2d = make_att_2d_masks(prefix_pad_masks, prefix_att_masks_1d)
         prefix_att_mask = einops.rearrange(prefix_att_2d, "b i j -> b 1 i j")
+        if extra_embs is not None and extra_attention_mask:
+            obs_reg_att_mask = policy_td.obs_register_att_mask
+            assert torch.eq(obs_reg_att_mask & input_pad_mask, obs_reg_att_mask).all(), "obs_register_att_mask must be a subset of input_pad_mask"
+            prefix_len = input_pad_mask.shape[1]
+            obs_reg_att_mask = einops.repeat(
+                obs_reg_att_mask, "b s -> b 1 extra_len s", extra_len=extra_len
+            )
+            prefix_att_mask[:, :, -extra_len:, :prefix_len] = obs_reg_att_mask
         torch.cuda.nvtx.range_pop()
 
         position_emb = lm.rotary_emb.forward(embs, position_ids)
