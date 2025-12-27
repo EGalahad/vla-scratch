@@ -227,7 +227,7 @@ class Qwen3VLBridge(VLMBridge):
 
         # compute ce loss
         hidden_states = lm.norm(hidden_states)
-        pred_logits = self.causal_model.lm_head(hidden_states[:, :-extra_len])
+        pred_logits = self.causal_model.lm_head(hidden_states[:, :hidden_states.shape[1]-extra_len])
         pred_logits = einops.rearrange(pred_logits[:, :-1], "b s v -> (b s) v")
         target_ids = einops.rearrange(policy_td.target_ids[:, 1:], "b s -> (b s)")
         ce_loss_sum = torch.nn.functional.cross_entropy(
