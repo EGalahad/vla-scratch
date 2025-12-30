@@ -23,7 +23,7 @@ python scripts/serve_policy.py \
   policy.transforms.0.max_length=500 \
   data=bbox_cotrain_train \
   inference_steps=10 \
-  checkpoint_path=/path/to/checkpoint_dir_or_file
+  checkpoint_path=hf:elijahgalahad/checkpoint-action_a_bbox_ab
 ```
 
 Sim client (adapt BlindVLA batched eval to call the ZMQ server):

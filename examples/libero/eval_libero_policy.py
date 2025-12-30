@@ -19,7 +19,7 @@ import hydra
 from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig, OmegaConf
 
-os.environ.setdefault("MUJOCO_GL", "glfw")
+# os.environ.setdefault("MUJOCO_GL", "glfw")
 
 import imageio.v2 as imageio
 import numpy as np
@@ -42,17 +42,20 @@ class LiberoEvalConfig:
     host: str = "127.0.0.1"
     port: int = 8000
     libero_task_suite: str = "libero_spatial"
-    libero_repo_root: Optional[str] = None
+
     state_history: int = 1
+    action_chunk_size: int = 5
+
     max_steps: int = 250
+
     headless: bool = True
     render_every: int = 1
+    camera_resolution: int = 256
+    render_camera: str = "frontview"
+
     rotate_images: bool = True
     settle_steps: int = 5
-    camera_resolution: int = 256
     seed: int = 0
-    action_chunk_size: int = 5
-    render_camera: str = "frontview"
     episodes_per_task: int = 1
     video_path: Optional[str] = None
 
@@ -130,17 +133,10 @@ def rollout_task(
     client: ZmqPolicyClient,
     env,
     task_description: str,
-    state_history: int,
-    max_steps: int,
-    rotate_images: bool,
-    settle_steps: int,
-    headless: bool,
-    render_every: int,
-    action_chunk_size: int,
-    video_path: Optional[str],
+    cfg: LiberoEvalConfig,
     episode_idx: int,
 ) -> bool:
-    state_len = state_history + 1
+    state_len = cfg.state_history + 1
     pos_hist: Deque[np.ndarray] = deque(maxlen=state_len)
     rot_hist: Deque[np.ndarray] = deque(maxlen=state_len)
     grip_hist: Deque[np.ndarray] = deque(maxlen=state_len)
@@ -148,7 +144,7 @@ def rollout_task(
     obs = env.reset()
 
     # Allow environment to settle
-    for _ in range(settle_steps):
+    for _ in range(cfg.settle_steps):
         dummy = get_libero_dummy_action()
         obs, _, _, _ = env.step(dummy)
 
@@ -160,27 +156,34 @@ def rollout_task(
 
     action_queue = []
     frames: List[np.ndarray] = []
-    if video_path:
-        breakpoint()
-        frames.append(_frame_from_obs(obs, rotate_images=rotate_images))
     success = False
-    for step in range(max_steps):
+    start_time = time.monotonic()
+    for step in range(cfg.max_steps):
         sample = _build_policy_sample(
-            obs, task_description, (pos_hist, rot_hist, grip_hist), rotate_images
+            obs, task_description, (pos_hist, rot_hist, grip_hist), cfg.rotate_images
         )
+        if cfg.video_path:
+            frames.append(_frame_from_obs(obs, rotate_images=cfg.rotate_images))
+
         if len(action_queue) == 0:
             start_inf_time = time.monotonic()
             resp = client.infer(sample)
             infer_time = time.monotonic() - start_inf_time
+            relative_time = time.monotonic() - start_time
             model_time = resp["server_timing"]["infer_s"]
-            print(f"inference time {infer_time:.3f}s, model time {model_time:.3f}s")
+            print(
+                f"[{relative_time:.3f}s from start] inference time {infer_time:.3f}s, "
+                f"model time {model_time:.3f}s"
+            )
             action_list = _to_action_list(resp)
-            action_queue.extend(action_list[:action_chunk_size])
+            action_queue.extend(action_list[: cfg.action_chunk_size])
         obs, _, done, info = env.step(action_queue.pop(0))
-        if video_path:
-            frames.append(_frame_from_obs(obs, rotate_images=rotate_images))
 
-        if not headless and (render_every > 0) and (step % render_every == 0):
+        if (
+            not cfg.headless
+            and (cfg.render_every > 0)
+            and (step % cfg.render_every == 0)
+        ):
             if hasattr(env, "render"):
                 env.render()
             else:
@@ -195,12 +198,13 @@ def rollout_task(
             success = True
             break
 
-    if video_path and frames:
+    if cfg.video_path and frames:
         safe_task = task_description.replace("/", "_")
         video_file = os.path.join(
-            video_path, f"episode_{episode_idx}_task_{safe_task}_success_{success}.mp4"
+            cfg.video_path,
+            f"episode_{episode_idx}_task_{safe_task}_success_{success}.mp4",
         )
-        with imageio.get_writer(video_file, fps=5) as writer:
+        with imageio.get_writer(video_file, fps=20) as writer:
             for frame in frames:
                 writer.append_data(frame)
     return success
@@ -260,14 +264,7 @@ def main(cfg: DictConfig) -> None:
                 client,
                 env,
                 task_desc,
-                state_history=args.state_history,
-                max_steps=args.max_steps,
-                rotate_images=args.rotate_images,
-                settle_steps=args.settle_steps,
-                headless=args.headless,
-                render_every=args.render_every,
-                action_chunk_size=args.action_chunk_size,
-                video_path=args.video_path,
+                args,
                 episode_idx=episode_idx,
             )
             successes.append(success)

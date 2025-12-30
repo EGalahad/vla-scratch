@@ -1,3 +1,4 @@
+import logging
 import torch
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -9,20 +10,60 @@ from torch.distributed.checkpoint.state_dict import (
     set_optimizer_state_dict,
 )
 
+_HF_PREFIX = "hf:"
+_LOGGER = logging.getLogger(__name__)
+
+
+def _resolve_hf_checkpoint_path(path: str) -> Path:
+    """Resolve an hf: checkpoint path to a local Hugging Face cache path.
+
+    Format: hf:org/repo[/optional/subpath] or hf:org/repo@revision[/subpath]
+    """
+    from huggingface_hub import snapshot_download, get_token
+
+    raw = path[len(_HF_PREFIX):]
+    if not raw:
+        raise ValueError("Expected hf:org/repo[/subpath] in checkpoint_path.")
+
+    parts = raw.split("/", 2)
+    if len(parts) >= 2:
+        repo_id = "/".join(parts[:2])
+        subpath = parts[2] if len(parts) == 3 else ""
+    else:
+        repo_id = raw
+        subpath = ""
+
+    revision = None
+    if "@" in repo_id:
+        repo_id, revision = repo_id.split("@", 1)
+
+    _LOGGER.info("Downloading Hugging Face checkpoint: %s", repo_id)
+    snapshot_dir = snapshot_download(
+        repo_id=repo_id,
+        repo_type="model",
+        revision=revision,
+        token=get_token(),
+    )
+    local_path = Path(snapshot_dir)
+    if subpath:
+        local_path = local_path / subpath
+    _LOGGER.info("Resolved Hugging Face checkpoint path: %s", local_path)
+    return local_path
+
 
 def find_latest_checkpoint(path: Path | str, desired_iter: Optional[int] = None) -> Optional[Path]:
     """Resolve a checkpoint path to a concrete checkpoint location.
 
-    Supports both legacy single-file checkpoints (checkpoint_*.pth) and the
-    new directory style (checkpoint_*/model.pt, optimizer.pt).
+    Supports checkpoint directories (checkpoint_*/model.pt) and hf: paths.
 
     Returns:
-    - If `path` is a file, returns it (legacy compatible).
+    - If `path` is a file, returns it.
     - If `path` is a checkpoint directory (contains model.pt), returns the dir.
-    - If `path` is a run directory, returns the newest checkpoint directory
-      if available, otherwise the newest legacy .pth file.
+    - If `path` is a run directory, returns the newest checkpoint directory.
     - None if nothing is found.
     """
+    if isinstance(path, str) and path.startswith(_HF_PREFIX):
+        path = _resolve_hf_checkpoint_path(path)
     p = Path(path)
     if p.is_file():
         # If this is model.pt inside a checkpoint dir, prefer returning the dir
@@ -53,23 +94,7 @@ def find_latest_checkpoint(path: Path | str, desired_iter: Optional[int] = None)
         dir_candidates.sort(key=_score)
         return dir_candidates[-1]
 
-    # Fallback: legacy single-file checkpoints
-    file_candidates = sorted(p.glob("checkpoint_*.pth"))
-    if not file_candidates:
-        return None
-
-    def _score_file(cp: Path) -> int:
-        stem = cp.stem  # checkpoint_X
-        try:
-            epoch = int(stem.split("_")[-1])
-            if desired_iter is not None and epoch == desired_iter:
-                return 10**9
-            return epoch
-        except Exception:
-            return -1
-
-    file_candidates.sort(key=_score_file)
-    return file_candidates[-1]
+    return None
 
 
 def load_model_from_checkpoint(
@@ -79,22 +104,21 @@ def load_model_from_checkpoint(
     *,
     strict: bool = False,
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
-    """Load a checkpoint into `model` supporting both dir and file formats.
+    """Load a checkpoint into `model`.
 
-    - New format: `path` is a checkpoint directory containing `model.pt` saved
-      as a full model state_dict (from FSDP get_state_dict or plain).
-    - Legacy: `path` is a single file containing either a raw state_dict or a
-      dict with key "model".
-    Returns (missing_keys, unexpected_keys).
+    `path` is a checkpoint directory containing `model.pt`, or a direct
+    path to `model.pt`. Returns (missing_keys, unexpected_keys).
     """
+    if isinstance(path, str) and path.startswith(_HF_PREFIX):
+        resolved = find_latest_checkpoint(path)
+        if resolved is None:
+            raise FileNotFoundError(f"No checkpoint found under {path}")
+        path = resolved
     p = Path(path)
     if p.is_dir():
         p = p / "model.pt"
     ckpt = torch.load(p, map_location=device)
-    if isinstance(ckpt, dict) and "model" in ckpt:
-        model_state = ckpt["model"]
-    else:
-        model_state = ckpt
+    model_state = ckpt
     missing, unexpected = model.load_state_dict(model_state, strict=strict)
     return tuple(missing), tuple(unexpected)
 
@@ -105,34 +129,27 @@ def load_checkpoint(
     global_rank: int,
     optimizer: Optional[torch.optim.Optimizer] = None,
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
-    """Distributed-aware checkpoint load supporting dir and file formats.
+    """Distributed-aware checkpoint load for directory checkpoints.
 
-    - New format: `checkpoint` is a directory with `model.pt` and `optimizer.pt`.
-    - Legacy: `checkpoint` is a single .pth file with keys {"model","optimizer"}
-      or a raw model state_dict.
-    Returns (missing_keys, unexpected_keys) from set_model_state_dict.
+    `checkpoint` is a directory with `model.pt` and `optimizer.pt`. Returns
+    (missing_keys, unexpected_keys) from set_model_state_dict.
     """
+    if isinstance(checkpoint, str) and checkpoint.startswith(_HF_PREFIX):
+        resolved = find_latest_checkpoint(checkpoint)
+        if resolved is None:
+            raise FileNotFoundError(f"No checkpoint found under {checkpoint}")
+        checkpoint = resolved
     p = Path(checkpoint)
     # Only rank 0 reads from disk; others pass empty dicts and receive via broadcast
     if global_rank == 0:
         model_sd: Dict[str, Any] = {}
         optim_sd: Dict[str, Any] = {}
-        if p.is_dir():
-            mp = p / "model.pt"
-            op = p / "optimizer.pt"
-            if mp.exists():
-                model_sd = torch.load(mp, map_location="cpu", mmap=True, weights_only=False)
-            if optimizer is not None and op.exists():
-                optim_sd = torch.load(op, map_location="cpu", mmap=True, weights_only=False)
-        else:
-            # Legacy single-file checkpoint
-            state = torch.load(p, map_location="cpu", mmap=True, weights_only=False)
-            if isinstance(state, dict):
-                model_sd = state.get("model", state)
-                if optimizer is not None:
-                    optim_sd = state.get("optimizer", {})
-            else:
-                model_sd = state
+        mp = p / "model.pt"
+        op = p / "optimizer.pt"
+        if mp.exists():
+            model_sd = torch.load(mp, map_location="cpu", mmap=True, weights_only=False)
+        if optimizer is not None and op.exists():
+            optim_sd = torch.load(op, map_location="cpu", mmap=True, weights_only=False)
     else:
         model_sd = {}
         optim_sd = {}

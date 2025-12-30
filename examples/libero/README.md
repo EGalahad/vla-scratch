@@ -18,9 +18,8 @@ python scripts/serve_policy.py \
   policy=pi-qwen \
   policy.state_history=1 \
   policy.action_horizon=20 \
-  policy.num_obs_registers=4 \
-  policy.expert_only_use_register=True \
   data=libero-ipec-spatial \
+  checkpoint_path=hf:elijahgalahad/libero_policy
 ```
 
 Sim client:

@@ -4,8 +4,7 @@ import os
 import socket
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, Optional, Sequence, Tuple, cast
+from typing import Any, Dict, Optional, Sequence, Tuple, cast, TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -18,8 +17,6 @@ from vla_scratch.transforms.data_keys import PROCESSED_ACTION_KEY
 from vla_scratch.datasets.config import DataConfig
 from vla_scratch.policies.config import PolicyConfig, create_policy
 
-from vla_scratch.transforms.data_types import DataSample
-from vla_scratch.transforms.base import TransformFn
 from vla_scratch.helpers.data import (
     build_input_transforms,
     build_output_transforms,
@@ -41,6 +38,11 @@ from vla_scratch.datasets.libero_global.data_keys import (
 
 from vla_scratch.serving.zmq_policy_server import ZmqPolicyServer
 from vla_scratch.transforms.common import ToTorch, ToNumpy
+
+if TYPE_CHECKING:
+    from vla_scratch.transforms.data_types import DataSample
+    from vla_scratch.policies.base import BasePolicy
+    from vla_scratch.transforms.base import TransformFn
 
 logger = logging.getLogger(__name__)
 
@@ -72,11 +74,11 @@ def _state_tensors_from_obs(obs: Dict[str, Any]) -> Dict[str, torch.Tensor]:
             return value.detach().clone().type(torch.float32)
         return torch.from_numpy(value).type(torch.float32)
 
-    return {
-        ARM_STATE_CART_POS_KEY: _as_tensor(obs[ARM_STATE_CART_POS_KEY]) if ARM_STATE_CART_POS_KEY in obs else None,
-        ARM_STATE_CART_ROT_KEY: _as_tensor(obs[ARM_STATE_CART_ROT_KEY]) if ARM_STATE_CART_ROT_KEY in obs else None,
-        GRIPPER_STATE_QPOS_KEY: _as_tensor(obs[GRIPPER_STATE_QPOS_KEY]) if GRIPPER_STATE_QPOS_KEY in obs else None,
-    }
+    result = {}
+    for key in [ARM_STATE_CART_POS_KEY, ARM_STATE_CART_ROT_KEY, GRIPPER_STATE_QPOS_KEY]:
+        if key in obs:
+            result[key] = _as_tensor(obs[key])
+    return result
 
 
 def _initialize_policy_dims(data_cfg: DataConfig, policy_cfg: PolicyConfig) -> None:
@@ -86,13 +88,11 @@ def _initialize_policy_dims(data_cfg: DataConfig, policy_cfg: PolicyConfig) -> N
     dataset = create_dataset(
         data_cfg,
         policy_cfg,
-        skip_norm_stats=False,
-        skip_policy_transforms=True,
     )
     if len(dataset) == 0:
         raise ValueError("Dataset is empty; unable to infer action/state dimensions.")
 
-    data_sample, _ = dataset[0]
+    data_sample: "DataSample" = dataset[0][0]
     action_tensor = (
         data_sample.action_chunk.actions
         if data_sample.action_chunk is not None
@@ -123,14 +123,15 @@ def _initialize_policy_dims(data_cfg: DataConfig, policy_cfg: PolicyConfig) -> N
             policy_cfg.state_dim,
             state_dim,
         )
+    return dataset
 
 
 class ServePolicy:
     def __init__(
         self,
-        model: torch.nn.Module,
-        input_transforms: Sequence[TransformFn],
-        output_transforms: Sequence[TransformFn],
+        model: "BasePolicy",
+        input_transforms: Sequence["TransformFn"],
+        output_transforms: Sequence["TransformFn"],
         inference_steps: int = 10,
     ) -> None:
         self._model = model
@@ -144,7 +145,7 @@ class ServePolicy:
         data_sample = obs
         for transform in self._input_transforms:
             data_sample = transform.compute(data_sample)
-        data_sample: DataSample = data_sample.to(self._device).unsqueeze(0)
+        data_sample: "DataSample" = data_sample.to(self._device).unsqueeze(0)
 
         actions = self._model.sample_actions(data_sample.observation, num_steps=self._num_steps)
 
@@ -158,47 +159,6 @@ class ServePolicy:
 
     def reset(self) -> None:
         pass
-
-
-class ReplayPolicy:
-    def __init__(
-        self,
-        dataset: torch.utils.data.Dataset,
-        model: torch.nn.Module,
-        input_transforms: Sequence[TransformFn],
-        output_transforms: Sequence[TransformFn],
-        inference_steps: int = 10,
-    ) -> None:
-        self._dataset = dataset
-        self._counter = 0
-
-        self._model = model
-        self._num_steps = inference_steps
-        self._device = next(model.parameters()).device
-        self._num_steps = inference_steps
-        self._input_transforms = input_transforms
-        self._output_transforms = output_transforms
-
-    @torch.inference_mode()
-    def infer(self, obs: Dict[str, Any]) -> Dict[str, Any]:
-        data_sample, _ = self._dataset[self._counter]
-        actions = data_sample.action_chunk.actions.unsqueeze(0)
-        self._counter += 1
-        print(self._counter)
-
-        state_payload = {
-            key: tensor.unsqueeze(0) for key, tensor in _state_tensors_from_obs(obs).items()
-        }
-        output = {
-            PROCESSED_ACTION_KEY: actions.squeeze(0).cpu(),
-            **state_payload,
-        }
-        for transform in self._output_transforms:
-            output = transform.compute(output)
-        return output
-
-    def reset(self) -> None:
-        self._counter = 0
 
 
 @hydra.main(config_name="serve", version_base=None)
@@ -217,7 +177,7 @@ def main(cfg: DictConfig) -> None:
             spec.update({"enable_aug": False})
             serve_cfg.data.input_transforms[i] = spec
 
-    _initialize_policy_dims(serve_cfg.data, serve_cfg.policy)
+    dataset = _initialize_policy_dims(serve_cfg.data, serve_cfg.policy)
     print("Initializing model...")
     with torch.device(device):
         model = create_policy(serve_cfg.policy)
@@ -225,7 +185,7 @@ def main(cfg: DictConfig) -> None:
 
     # Load latest checkpoint
     if serve_cfg.checkpoint_path is not None:
-        ckpt = find_latest_checkpoint(Path(serve_cfg.checkpoint_path))
+        ckpt = find_latest_checkpoint(serve_cfg.checkpoint_path)
         if ckpt is None:
             raise FileNotFoundError(
                 f"No checkpoint found under {serve_cfg.checkpoint_path}"
@@ -251,13 +211,6 @@ def main(cfg: DictConfig) -> None:
         output_transforms=output_transforms,
         inference_steps=serve_cfg.inference_steps,
     )
-    # policy = ReplayPolicy(
-    #     dataset,
-    #     model,
-    #     input_transforms=input_transforms,
-    #     output_transforms=output_transforms,
-    #     inference_steps=serve_cfg.inference_steps,
-    # )
 
     metadata = {
         "policy": serve_cfg.policy._target_.split(".")[-1],
@@ -265,21 +218,13 @@ def main(cfg: DictConfig) -> None:
     }
 
     # Warmup once to trigger initialization
-    # warmup = True
-    warmup = False
+    warmup = True
+    # warmup = False
     if warmup:
-        history_len = serve_cfg.policy.state_history + 1
-        observation_in = {
-            CAM_FRONT_KEY: np.random.randint(0, 255, size=(3, 256, 256), dtype=np.uint8),
-            CAM_WRIST_KEY: np.random.randint(0, 255, size=(3, 256, 256), dtype=np.uint8),
-            ARM_STATE_CART_POS_KEY: np.random.rand(history_len, 3).astype(np.float32),
-            ARM_STATE_CART_ROT_KEY: np.random.rand(history_len, 3).astype(np.float32),
-            GRIPPER_STATE_QPOS_KEY: np.random.rand(history_len, 2).astype(np.float32),
-            TASK_NAME_KEY: "Pick up the red block and place it on the green block.",
-        }
+        observation_in = dataset.base_dataset[0]
         policy.infer(observation_in)
-        policy.reset()
 
+    policy.reset()
     server = ZmqPolicyServer(host=serve_cfg.host, port=serve_cfg.port, metadata=metadata)
 
     hostname = socket.gethostname()
