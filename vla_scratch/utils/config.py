@@ -49,9 +49,3 @@ def resolve_config_placeholders(
     s = re.sub(r"\{policy\.([a-zA-Z0-9_]+)\}", _replace_policy, s)
     return s
 
-
-def save_train_config(cfg: DictConfig, run_dir: Path) -> Path:
-    train_cfg_path = run_dir / "train-cfg.yaml"
-    OmegaConf.save(cfg, train_cfg_path)
-    return train_cfg_path
-

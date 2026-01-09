@@ -58,7 +58,7 @@ pi_paligemma_config = PiConfig(
             "_target_": "vla_scratch.policies.modules.vlm_bridge.paligemma.processor.PaligemmaProcessor",
             "processor_class": "PaliGemmaProcessor",
             "model_id": "google/paligemma-3b-mix-224",
-            "max_length": 32,
+            "max_length": 550,
             "target_size": (224, 224),
         }
     ],
@@ -75,7 +75,7 @@ pi_paligemma2_config = PiConfig(
             "_target_": "vla_scratch.policies.modules.vlm_bridge.paligemma.processor.PaligemmaProcessor",
             "processor_class": "PaliGemmaProcessor",
             "model_id": "google/paligemma2-3b-mix-224",
-            "max_length": 32,
+            "max_length": 550,
             "target_size": (224, 224),
         }
     ],
@@ -92,7 +92,7 @@ pi_qwen_config = PiConfig(
             "_target_": "vla_scratch.policies.modules.vlm_bridge.qwen.processor.QwenProcessor",
             "processor_class": "Qwen3VLProcessor",
             "model_id": "Qwen/Qwen3-VL-2B-Instruct",
-            "max_length": 500,
+            "max_length": 180,
             # WARN: select this based on your image sizes and prompt lengths, try to make it minimum as possible because if impacts iteration time a lot!
             "padding": "max_length",
         }

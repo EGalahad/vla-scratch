@@ -27,6 +27,7 @@ from vla_scratch.policies.config import create_policy, PolicyConfig
 from vla_scratch.utils.checkpoint import (
     find_latest_checkpoint,
     load_model_from_checkpoint,
+    merge_policy_cfg_from_checkpoint,
 )
 from vla_scratch.helpers.training import eval_sample_mse
 
@@ -36,10 +37,11 @@ if TYPE_CHECKING:
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+
 @dataclass
 class EvalConfig:
     defaults: list[Any] = field(
-        default_factory=lambda: ["_self_", {"policy": "pi"}, {"data": "moz"}]
+        default_factory=lambda: ["_self_", {"policy": "pi-qwen"}, {"data": "libero-spatial"}]
     )
     # Hydra configs
     data: DataConfig = MISSING
@@ -52,17 +54,22 @@ class EvalConfig:
     num_steps: int = 10
     # Runtime
     checkpoint_path: Optional[str] = None
+    merge_policy_cfg: bool = False
 
 
 cs = ConfigStore.instance()
 cs.store(name="eval", node=EvalConfig())
 
 
-
 @hydra.main(config_name="eval", version_base=None)
 def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
+    if (checkpoint_path := cfg.get("checkpoint_path")) is not None:
+        cfg.checkpoint_path = find_latest_checkpoint(checkpoint_path)
+    if cfg.get("merge_policy_cfg", False):
+        cfg = merge_policy_cfg_from_checkpoint(cfg, cfg.get("checkpoint_path"))
+        OmegaConf.resolve(cfg)
 
     # Convert to typed objects after merge
     eval_cfg = cast(EvalConfig, OmegaConf.to_object(cfg))
@@ -94,10 +101,7 @@ def main(cfg: DictConfig) -> None:
         model: "BasePolicy" = create_policy(policy_cfg)
     model.compute_loss(sample0.to(device))
 
-    if eval_cfg.checkpoint_path is not None:
-        ckpt = find_latest_checkpoint(eval_cfg.checkpoint_path)
-        if ckpt is None:
-            raise FileNotFoundError(f"No checkpoint found under {eval_cfg.checkpoint_path}")
+    if (ckpt := eval_cfg.checkpoint_path) is not None:
         print(f"Loading checkpoint: {ckpt}")
         missing, unexpected = load_model_from_checkpoint(
             model, ckpt, device, strict=False
@@ -124,9 +128,13 @@ def main(cfg: DictConfig) -> None:
     )
 
     # Evaluate MSE
-    mse = eval_sample_mse(model, loader, device, num_sample_steps=int(eval_cfg.num_steps), local_rank=0)
+    mse = eval_sample_mse(
+        model, loader, device, num_sample_steps=int(eval_cfg.num_steps), local_rank=0
+    )
     mse = mse["sample_mse"]
-    print(f"Eval MSE over {num} samples (batch={eval_cfg.batch_size}, steps={eval_cfg.num_steps}): {mse:.6f}")
+    print(
+        f"Eval MSE over {num} samples (batch={eval_cfg.batch_size}, steps={eval_cfg.num_steps}): {mse:.6f}"
+    )
 
 
 if __name__ == "__main__":

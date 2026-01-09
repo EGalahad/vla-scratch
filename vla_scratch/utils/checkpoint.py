@@ -9,6 +9,7 @@ from torch.distributed.checkpoint.state_dict import (
     set_model_state_dict,
     set_optimizer_state_dict,
 )
+from omegaconf import DictConfig, OmegaConf
 
 _HF_PREFIX = "hf:"
 _LOGGER = logging.getLogger(__name__)
@@ -98,6 +99,25 @@ def find_latest_checkpoint(path: Path | str, desired_iter: Optional[int] = None)
         return dir_candidates[-1]
 
     return None
+
+
+def merge_policy_cfg_from_checkpoint(
+    cfg: DictConfig,
+    checkpoint_path: Optional[Path | str],
+) -> DictConfig:
+    """Merge saved cfg.yaml from a checkpoint run directory into `cfg`.
+
+    Only `policy` and `data` groups are merged to keep runtime overrides intact.
+    """
+    if checkpoint_path is None:
+        return cfg
+    run_dir = Path(checkpoint_path)
+    cfg_path = run_dir.parent / "cfg.yaml"
+    saved_cfg = OmegaConf.load(cfg_path)
+
+    if "policy" in saved_cfg:
+        cfg["policy"] = OmegaConf.merge(cfg.get("policy"), saved_cfg["policy"])
+    return cfg
 
 
 def load_model_from_checkpoint(
@@ -239,3 +259,12 @@ def save_checkpoint(
         torch.save(model_state_dict, model_file)
         torch.save(optim_state_dict, optim_file)
         print(f"Saved checkpoint to {base} (model.pt, optimizer.pt)")
+
+
+def save_cfg_yaml(saved_cfg: DictConfig, run_dir: Path | str) -> Path:
+    """Save a structured config to cfg.yaml in run_dir."""
+    run_path = Path(run_dir)
+    cfg_path = run_path / "cfg.yaml"
+    with open(cfg_path, "w") as f:
+        OmegaConf.save(saved_cfg, f)
+    return cfg_path

@@ -41,8 +41,8 @@ from vla_scratch.utils.checkpoint import (
     find_latest_checkpoint,
     load_checkpoint,
     save_checkpoint,
+    save_cfg_yaml,
 )
-from vla_scratch.utils.config import save_train_config
 
 
 if TYPE_CHECKING:
@@ -81,7 +81,6 @@ class TrainConfig:
     split_seed: int = 42
     epoch_iterator: str = "eager"  # "prefetch" or "eager"
     # optimization
-    epochs: int = 20
     batch_size: int = 16
     grad_accum_steps: int = 1
 
@@ -103,6 +102,7 @@ class TrainConfig:
     exp_name: str = "pi-training"
     log_interval: int = 32
     eval_interval: int = 512
+    epochs: int = 20
     save_interval: int = 1  # in epochs
 
     # data
@@ -155,7 +155,6 @@ def main(cfg: DictConfig) -> None:
     time_stamp = now.strftime("%H-%M-%S")
     run_dir = Path("./outputs") / date_stamp / f"{time_stamp}-{train_cfg.exp_name}"
     run_dir = run_dir.resolve()
-    cfg.run_dir = str(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     os.chdir(run_dir)
     setproctitle(f"{train_cfg.exp_name}")
@@ -166,7 +165,6 @@ def main(cfg: DictConfig) -> None:
 
     local_rank, global_rank, world_size, mesh = setup_dist()
     device = torch.device(type="cuda", index=local_rank)
-    cfg.world_size = world_size
 
     print_with_rank("create dataloaders...")
     train_loaders, eval_loaders = create_dataloaders(
@@ -271,10 +269,11 @@ def main(cfg: DictConfig) -> None:
             mode=train_cfg.wandb.mode,
             tags=train_cfg.wandb.tags,
         )
-        # update cfg
-        run.config.update(OmegaConf.to_container(cfg))
-        # update train_cfg
-        # run.config.update(train_cfg.asdict())
+        saved_cfg = OmegaConf.structured(train_cfg)
+        OmegaConf.set_struct(saved_cfg, False)
+        saved_cfg.run_dir = str(run_dir)
+        saved_cfg.world_size = world_size
+        run.config.update(OmegaConf.to_container(saved_cfg, resolve=True))
 
         default_run_name = (
             f"{train_cfg.exp_name}-{datetime.datetime.now().strftime('%m-%d-%H-%M')}"
@@ -282,12 +281,7 @@ def main(cfg: DictConfig) -> None:
         run_idx = run.name.split("-")[-1]
         run.name = f"{run_idx}-{default_run_name}"
 
-        train_cfg_path = save_train_config(train_cfg, run_dir)
-        run.save(str(train_cfg_path), base_path=str(run_dir))
-        # save cfg
-        cfg_path = run_dir / "cfg.yaml"
-        with open(cfg_path, "w") as f:
-            OmegaConf.save(cfg, f)
+        cfg_path = save_cfg_yaml(saved_cfg, run_dir)
         run.save(str(cfg_path), base_path=str(run_dir))
         
     global_step = 0
@@ -343,6 +337,9 @@ def main(cfg: DictConfig) -> None:
 
         model.train()
         for i in pbar:
+            if i == 36:
+                torch.cuda.cudart().cudaProfilerStart()
+
             torch.cuda.nvtx.range_push("Zero Grad")
             model.unshard()
             optimizer.zero_grad(set_to_none=True)
@@ -463,6 +460,10 @@ def main(cfg: DictConfig) -> None:
                 if global_rank == 0:
                     run.log(log_dict)
                 dist.barrier()
+            if i == 48:
+                torch.cuda.cudart().cudaProfilerStop()
+                break
+        break
 
         if (epoch + 1) % train_cfg.save_interval == 0:
             save_checkpoint(model, optimizer, global_rank, f"checkpoint_{epoch+1}")

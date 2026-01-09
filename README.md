@@ -17,22 +17,23 @@ Setup with `uv sync`. Verify your installation with the following commands:
 uv run torchrun --standalone --nnodes=1 --nproc_per_node=8 \
     scripts/train_policy.py \
     policy=pi-qwen \
+    policy.state_history=0 \
+    policy.action_horizon=30 \
+    policy.transforms.0.max_length=180 \
     data=libero-spatial \
     lr.base=5e-5 \
     +lr.vlm_bridge=1e-5 \
     +lr.action_expert=5e-5 \
+    save_interval=10
     wandb.mode=online
 
 # Evaluation
 uv run \
-    policy=pi-qwen \
-    policy.state_history=1 \
-    policy.action_horizon=30 \
-    policy.transforms.0.max_length=500 \
+    scripts/eval_policy.py \
+    checkpoint_path=hf:elijahgalahad/libero_policy \
     data=libero-spatial \
-    data.video_backend=pyav \
-    batch_size=16 \
-    checkpoint_path=hf:elijahgalahad/libero_policy
+    data.video_backend=pyav
+    merge_policy_cfg=true
 ```
 
 

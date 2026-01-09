@@ -25,14 +25,7 @@ from vla_scratch.helpers.data import (
 from vla_scratch.utils.checkpoint import (
     find_latest_checkpoint,
     load_model_from_checkpoint,
-)
-from vla_scratch.datasets.libero_global.data_keys import (
-    ARM_STATE_CART_POS_KEY,
-    ARM_STATE_CART_ROT_KEY,
-    CAM_FRONT_KEY,
-    CAM_WRIST_KEY,
-    GRIPPER_STATE_QPOS_KEY,
-    TASK_NAME_KEY,
+    merge_policy_cfg_from_checkpoint,
 )
 
 from vla_scratch.utils.serving.zmq_policy_server import ZmqPolicyServer
@@ -49,7 +42,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ServeConfig:
     defaults: list[Any] = field(
-        default_factory=lambda: ["_self_", {"policy": "pi"}, {"data": "libero-ipec"}]
+        default_factory=lambda: ["_self_", {"policy": "pi-qwen"}, {"data": "libero-spatial"}]
     )
 
     # server
@@ -61,23 +54,11 @@ class ServeConfig:
     data: DataConfig = MISSING
     policy: PolicyConfig = MISSING
     checkpoint_path: Optional[str] = None
+    merge_policy_cfg: bool = False
 
 
 cs = ConfigStore.instance()
 cs.store(name="serve", node=ServeConfig())
-
-
-def _state_tensors_from_obs(obs: Dict[str, Any]) -> Dict[str, torch.Tensor]:
-    def _as_tensor(value: Any) -> torch.Tensor:
-        if isinstance(value, torch.Tensor):
-            return value.detach().clone().type(torch.float32)
-        return torch.from_numpy(value).type(torch.float32)
-
-    result = {}
-    for key in [ARM_STATE_CART_POS_KEY, ARM_STATE_CART_ROT_KEY, GRIPPER_STATE_QPOS_KEY]:
-        if key in obs:
-            result[key] = _as_tensor(obs[key])
-    return result
 
 
 def _initialize_policy_dims(data_cfg: DataConfig, policy_cfg: PolicyConfig) -> None:
@@ -146,11 +127,12 @@ class ServePolicy:
             data_sample = transform.compute(data_sample)
         data_sample: "DataSample" = data_sample.to(self._device).unsqueeze(0)
 
-        actions = self._model.sample_actions(data_sample.observation, num_steps=self._num_steps)
+        actions = self._model.sample_actions(
+            data_sample.observation, num_steps=self._num_steps
+        )
 
         output = {
             PROCESSED_ACTION_KEY: actions.squeeze(0).cpu(),
-            **_state_tensors_from_obs(obs),
         }
         for transform in self._output_transforms:
             output = transform.compute(output)
@@ -164,6 +146,11 @@ class ServePolicy:
 def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
+    if (checkpoint_path := cfg.get("checkpoint_path")) is not None:
+        cfg.checkpoint_path = find_latest_checkpoint(checkpoint_path)
+    if cfg.get("merge_policy_cfg", False):
+        cfg = merge_policy_cfg_from_checkpoint(cfg, cfg.get("checkpoint_path"))
+        OmegaConf.resolve(cfg)
 
     serve_cfg = cast(ServeConfig, OmegaConf.to_object(cfg))
 
@@ -183,14 +170,11 @@ def main(cfg: DictConfig) -> None:
     print("Model initialized.")
 
     # Load latest checkpoint
-    if serve_cfg.checkpoint_path is not None:
-        ckpt = find_latest_checkpoint(serve_cfg.checkpoint_path)
-        if ckpt is None:
-            raise FileNotFoundError(
-                f"No checkpoint found under {serve_cfg.checkpoint_path}"
-            )
+    if (ckpt := serve_cfg.checkpoint_path) is not None:
         print(f"Loading checkpoint: {ckpt}")
-        missing, unexpected = load_model_from_checkpoint(model, ckpt, device, strict=False)
+        missing, unexpected = load_model_from_checkpoint(
+            model, ckpt, device, strict=False
+        )
         print("Checkpoint loaded.")
         if missing:
             logger.warning("Missing keys when loading checkpoint: %s", missing)
@@ -200,8 +184,10 @@ def main(cfg: DictConfig) -> None:
     model.eval()
 
     # Build transforms
-    input_transforms = [ToTorch()] + build_input_transforms(serve_cfg.data, serve_cfg.policy)
-    output_transforms = build_output_transforms(serve_cfg.data, serve_cfg.policy) + [ToNumpy()]
+    input_transforms = build_input_transforms(serve_cfg.data, serve_cfg.policy)
+    output_transforms = build_output_transforms(serve_cfg.data, serve_cfg.policy)
+    input_transforms = [ToTorch()] + input_transforms
+    output_transforms = output_transforms + [ToNumpy()]
 
     # Wrap into serving policy
     policy = ServePolicy(
@@ -224,7 +210,9 @@ def main(cfg: DictConfig) -> None:
         policy.infer(observation_in)
 
     policy.reset()
-    server = ZmqPolicyServer(host=serve_cfg.host, port=serve_cfg.port, metadata=metadata)
+    server = ZmqPolicyServer(
+        host=serve_cfg.host, port=serve_cfg.port, metadata=metadata
+    )
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)
