@@ -14,17 +14,17 @@ export PYTHONPATH=$PYTHONPATH:$LIBERO_ROOT
 
 Start up policy server:
 ```bash
-source .venv/bin/activate
-python scripts/serve_policy.py \
-  policy=pi-qwen \
-  policy.state_history=1 \
-  policy.action_horizon=30 \
-  policy.transforms.0.max_length=180 \
-  data=libero-spatial \
-  checkpoint_path=hf:elijahgalahad/libero_policy
+uv run scripts/serve_policy.py \
+    checkpoint_path=hf:<checkpoint_name> \
+    data=libero-spatial \
+    merge_policy_cfg=true
 ```
 
-Start sim client to eval policy:
+Pretrained checkpoints:
+- `elijahgalahad/libero-spatial-paligemma`
+- `elijahgalahad/libero-spatial-qwen`
+
+Start simulation and policy client:
 ```bash
 source examples/libero/.venv/bin/activate
 export LIBERO_ROOT=$(pwd)/../LIBERO

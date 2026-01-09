@@ -1,5 +1,6 @@
 ### Training
 ```bash
+# LIBERO with Qwen3-VL
 uv run torchrun --standalone --nnodes=1 --nproc_per_node=8 \
     scripts/train_policy.py \
     policy=pi-qwen \
@@ -14,6 +15,7 @@ uv run torchrun --standalone --nnodes=1 --nproc_per_node=8 \
     +lr.action_expert=5e-5 \
     wandb.mode=online
 
+# LIBERO with PaliGemma
 uv run torchrun --standalone --nnodes=1 --nproc_per_node=8 \
     scripts/train_policy.py \
     policy=pi-paligemma \
