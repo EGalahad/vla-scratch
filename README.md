@@ -17,14 +17,10 @@ Setup with `uv sync`. Verify your installation with the following commands:
 uv run torchrun --standalone --nnodes=1 --nproc_per_node=8 \
     scripts/train_policy.py \
     policy=pi-qwen \
-    policy.state_history=0 \
-    policy.action_horizon=30 \
-    policy.transforms.0.max_length=180 \
     data=libero-spatial \
     lr.base=5e-5 \
     +lr.vlm_bridge=1e-5 \
     +lr.action_expert=5e-5 \
-    save_interval=10
     wandb.mode=online
 
 # Evaluation
@@ -36,7 +32,8 @@ uv run scripts/eval_policy.py \
 ```
 
 
-See [instructions](INSTRUCTIONS.md) for more training and evaluation commands.
+See [Instructions](INSTRUCTIONS.md) for more training commands. See [examples](examples/) for detailed benchmark simulation evaluation instructions.
+
 ## ✨ Key-Features
 
 - **Explicit Data Model for Composable Modules** 
@@ -58,7 +55,7 @@ TODO: Heterogeneous dataset co-training (VQA, Action), Multi VLM backbone, Simul
 
 ## 🗂️ Codebase Structure
 
-VLA-Scratch is a fully modular, high-performance VLA stack built around Hydra configs, TensorClass data models, and reusable training helpers.
+VLA-Scratch is a fully modular, high-performance VLA stack built around TensorClass data models, hierarchical config system, and reusable training helpers.
 
 | Path | Description |
 | --- | --- |

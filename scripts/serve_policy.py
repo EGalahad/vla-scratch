@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Sequence, Tuple, cast, TYPE_CHECKING
 
 import numpy as np
+import art
 import torch
 
 import hydra
@@ -146,6 +147,7 @@ class ServePolicy:
 def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
+    art.tprint("VLA-SCRATCH", font="big")
     if (checkpoint_path := cfg.get("checkpoint_path")) is not None:
         cfg.checkpoint_path = find_latest_checkpoint(checkpoint_path)
     if cfg.get("merge_policy_cfg", False):

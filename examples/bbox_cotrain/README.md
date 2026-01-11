@@ -13,20 +13,14 @@ uv pip install -e $BLINDVLA_ROOT/SimplerEnv
 
 Policy server (root venv):
 ```bash
-source .venv/bin/activate
-python scripts/serve_policy.py \
-  policy=pi-qwen \
-  policy.state_history=0 \
-  policy.action_horizon=10 \
-  policy.transforms.0.max_length=500 \
-  data=bbox_cotrain_test \
-  inference_steps=10 \
-  checkpoint_path=hf:elijahgalahad/checkpoint-action_a_bbox_ab
+uv run scripts/serve_policy.py \
+    checkpoint_path=hf:elijahgalahad/checkpoint-action_a_bbox_ab
+    data=bbox_cotrain_test \
+    merge_policy_cfg=true
 ```
 
 Sim client (adapt BlindVLA batched eval to call the ZMQ server):
 ```bash
 source examples/bbox_cotrain/.venv/bin/activate
-
 python examples/bbox_cotrain/simulation.py render=true sim_backend=cpu port=8000 obj_set=train
 ```

@@ -8,6 +8,7 @@ from tqdm import tqdm
 import wandb
 import datetime
 from setproctitle import setproctitle
+import art
 
 import torch
 import torch.distributed as dist
@@ -103,7 +104,7 @@ class TrainConfig:
     log_interval: int = 32
     eval_interval: int = 512
     epochs: int = 20
-    save_interval: int = 1  # in epochs
+    save_interval: int = 10  # in epochs
 
     # data
     data: DataConfig = MISSING
@@ -141,6 +142,8 @@ import vla_scratch.configs
 def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
+
+    art.tprint("VLA-SCRATCH", font="big")
 
     train_cfg = cast(TrainConfig, OmegaConf.to_object(cfg))
 
@@ -192,27 +195,6 @@ def main(cfg: DictConfig) -> None:
     print_with_rank("warmup pass...")
     loss, _ = model.compute_loss(dummy_data)
     loss.backward()
-
-    # for eval_key, (eval_dataloader, eval_type) in eval_loaders.items():
-    #     if eval_type == "sample_mse":
-    #         eval_metrics = eval_sample_mse(
-    #             model=model,
-    #             dataloader=eval_dataloader,
-    #             device=device,
-    #             num_sample_steps=train_cfg.eval_num_sample_steps,
-    #             local_rank=local_rank,
-    #         )
-    #     elif eval_type == "generation":
-    #         eval_metrics = eval_generation(
-    #             model=model,
-    #             dataloader=eval_dataloader,
-    #             device=device,
-    #             local_rank=local_rank,
-    #         )
-    #     else:
-    #         raise ValueError(
-    #             f"Unsupported eval_type '{eval_type}' for dataset '{eval_key}'."
-    #         )
 
     model.initialize_weights()
 

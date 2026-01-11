@@ -35,12 +35,11 @@ dependencies = [
     "datasets",
     "jsonlines",
     "matplotlib",
-    # the last commit before dataset version 3.0
-    "lerobot @ git+https://github.com/huggingface/lerobot@v0.4.2",
     "accelerate",
     "mujoco",
     "viser",
-    # "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.7cxx11abiTRUE-cp310-cp310-linux_x86_64.whl",
+    "art",
+    "lerobot @ git+https://github.com/huggingface/lerobot@v0.4.2",
 ]
 
 [tool.setuptools.packages.find]

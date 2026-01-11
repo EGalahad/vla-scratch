@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional, cast, TYPE_CHECKING
 import os
 from tqdm import tqdm
+import art
 
 import hydra
 from hydra.core.config_store import ConfigStore
@@ -65,6 +66,7 @@ cs.store(name="eval", node=EvalConfig())
 def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
+    art.tprint("VLA-SCRATCH", font="big")
     if (checkpoint_path := cfg.get("checkpoint_path")) is not None:
         cfg.checkpoint_path = find_latest_checkpoint(checkpoint_path)
     if cfg.get("merge_policy_cfg", False):
