@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-import numpy as np
 import os
 import time
 from typing import cast, Any, Optional, List, Tuple, TYPE_CHECKING
@@ -9,6 +8,7 @@ import wandb
 import datetime
 from setproctitle import setproctitle
 import art
+import emoji
 
 import torch
 import torch.distributed as dist
@@ -143,8 +143,6 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
 
-    art.tprint("VLA-SCRATCH", font="big")
-
     train_cfg = cast(TrainConfig, OmegaConf.to_object(cfg))
 
     # Resolve checkpoint path (supports file or directory)
@@ -169,7 +167,12 @@ def main(cfg: DictConfig) -> None:
     local_rank, global_rank, world_size, mesh = setup_dist()
     device = torch.device(type="cuda", index=local_rank)
 
-    print_with_rank("create dataloaders...")
+    if local_rank == 0:
+        art.tprint("VLA-SCRATCH", font="big")
+        # print world size, mesh info
+        print(f" World size: {world_size}")
+        print(f"Device mesh: {mesh}")
+
     train_loaders, eval_loaders = create_dataloaders(
         train_cfg,
         world_size,
@@ -187,12 +190,11 @@ def main(cfg: DictConfig) -> None:
     train_cfg.policy.action_dim = dummy_data.action_chunk.actions.shape[-1]
     train_cfg.policy.state_dim = dummy_data.observation.state.shape[-1]
 
-    print_with_rank("create model...")
     with torch.device(device):
         model: "BasePolicy" = train_cfg.policy.instantiate()
 
     # Warmup pass
-    print_with_rank("warmup pass...")
+    print_with_rank(emoji.emojize(":fire: Warmup pass..."))
     loss, _ = model.compute_loss(dummy_data)
     loss.backward()
 
@@ -289,6 +291,8 @@ def main(cfg: DictConfig) -> None:
         for name, loader in train_loaders.items()
     }
     torch.cuda.empty_cache()
+
+    print_with_rank(emoji.emojize(":rocket: Starting training..."))
     for epoch in range(train_cfg.epochs):
         data_loader_iters = {
             name: next(epoch_iterator)

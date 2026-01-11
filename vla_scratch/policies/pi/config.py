@@ -99,7 +99,27 @@ pi_qwen_config = PiConfig(
     ],
 )
 
+pi_smolvlm_config = PiConfig(
+    _target_="vla_scratch.policies.pi.policy.PiPolicy",
+    state_history=1,
+    action_horizon=10,
+    model_id="HuggingFaceTB/SmolVLM2-256M-Video-Instruct",
+    vlm_type="SmolVLMForConditionalGeneration",
+    transforms=[
+        {
+            "_target_": "vla_scratch.policies.modules.vlm_bridge.smolvlm.processor.SmolVLMProcessor",
+            "processor_class": "SmolVLMProcessor",
+            "model_id": "HuggingFaceTB/SmolVLM2-256M-Video-Instruct",
+            "max_length": 180,
+            "padding": "max_length",
+            "image_size_longest_edge": 512,
+            "max_image_size_longest_edge": 512,
+        }
+    ],
+)
+
 cs = ConfigStore.instance()
 cs.store(name="pi-paligemma", node=pi_paligemma_config, group="policy")
 cs.store(name="pi-paligemma2", node=pi_paligemma2_config, group="policy")
 cs.store(name="pi-qwen", node=pi_qwen_config, group="policy")
+cs.store(name="pi-smol", node=pi_smolvlm_config, group="policy")

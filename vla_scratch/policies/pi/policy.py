@@ -20,6 +20,7 @@ from vla_scratch.policies.base import BasePolicy
 from vla_scratch.policies.modules.action_expert.cross_attention_dit import DiTModel
 from vla_scratch.policies.modules.vlm_bridge.paligemma.bridge import PaligemmaBridge
 from vla_scratch.policies.modules.vlm_bridge.qwen.bridge import Qwen3VLBridge
+from vla_scratch.policies.modules.vlm_bridge.smolvlm.bridge import SmolVLMBridge
 
 from vla_scratch.policies.utils.training import (
     apply_checkpoint_when_training,
@@ -71,6 +72,11 @@ class PiPolicy(BasePolicy):
             )
         elif config.vlm_type == "Qwen3VLForConditionalGeneration":
             self.vlm_bridge = Qwen3VLBridge(
+                model_id=config.model_id,
+                vlm_type=config.vlm_type,
+            )
+        elif config.vlm_type == "SmolVLMForConditionalGeneration":
+            self.vlm_bridge = SmolVLMBridge(
                 model_id=config.model_id,
                 vlm_type=config.vlm_type,
             )

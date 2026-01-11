@@ -12,34 +12,34 @@ description = "Utilities for working with VLA Scratch datasets and policies."
 requires-python = "==3.10.*"
 dependencies = [
     "torch",
-    "torchvision==0.22.0",
     "numpy",
-    "h5py",
-    "transformers==4.57.1",
     "jaxtyping",
-    "fsspec",
-    "filelock",
     "tqdm",
     "einops",
     "tensordict",
+    "transformers==4.57.1",
+    "lerobot @ git+https://github.com/huggingface/lerobot@v0.4.2",
+    "jsonlines",
+    "pillow",
+    "torchvision==0.22.0",
     "hydra-core",
     "omegaconf",
     "wandb",
     "setproctitle",
-    "pillow",
     "setuptools",
     # serve policy
     "pyzmq",
     "msgpack",
-    "pdbpp",
-    "datasets",
-    "jsonlines",
     "matplotlib",
-    "accelerate",
     "mujoco",
-    "viser",
     "art",
-    "lerobot @ git+https://github.com/huggingface/lerobot@v0.4.2",
+    # debug
+    "pdbpp",
+    # not used
+    # "h5py",
+    # "accelerate",
+    # "viser",
+    "emoji>=2.15.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -50,5 +50,7 @@ include = [
 ]
 namespaces = true
 
-[tool.uv]
-python-install-mirror = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+[project.optional-dependencies]
+smolvlm = [
+    "num2words",
+]

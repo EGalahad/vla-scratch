@@ -39,7 +39,7 @@ world_size = 1
 
 
 def setup_dist():
-    """Initialize DDP process group using env:// init and optionally build a device mesh."""
+    """Initialize dist process group using env:// init and optionally build a device mesh."""
     global local_rank, global_rank, world_size
     mesh = None
     try:
@@ -68,9 +68,6 @@ def setup_dist():
                     (world_size,),
                     mesh_dim_names=("process",),
                 )
-        print(
-            f"Initialized DDP: rank {global_rank}/{world_size}, local rank {local_rank}"
-        )
     except ValueError:
         local_rank = 0
         global_rank = 0
