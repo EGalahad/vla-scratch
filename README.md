@@ -27,7 +27,7 @@ uv run torchrun --standalone --nnodes=1 --nproc_per_node=8 \
 uv run scripts/eval_policy.py \
     checkpoint_path=hf:elijahgalahad/libero-spatial-qwen \
     data=libero-spatial \
-    data.video_backend=pyav
+    data.video_backend=pyav \
     merge_policy_cfg=true
 ```
 
