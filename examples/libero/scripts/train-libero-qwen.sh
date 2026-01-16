@@ -30,7 +30,6 @@ uv run torchrun --standalone --nnodes=1 --nproc_per_node=$NPROCS \
     lr.base=5e-5 \
     +lr.vlm_bridge=1e-5 \
     +lr.action_expert=5e-5 \
-    cosine_anneal_epoch=0 \
     epochs=50 \
     save_interval=20 \
     wandb.mode=online \

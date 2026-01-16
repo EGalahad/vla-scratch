@@ -64,6 +64,4 @@ class BasePolicy(nn.Module, ABC):
         self, *args, **kwargs
     ) -> None:  # pragma: no cover - optional hook
         """Optional shard hook for policies that support FSDP."""
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not implement FSDP sharding."
-        )
+        return self

@@ -6,7 +6,6 @@
   For Vision-Language-Action Models
   </h1>
 </div>
-<!-- add a huggingface badge, a twitter badge and a github star badge -->
 
 ## 🚀 Quickstart
 
@@ -39,7 +38,6 @@ uv run scripts/serve_policy.py \
     merge_policy_cfg=true
 ```
 
-
 See [scripts/README.md](scripts/README.md) for more training commands. See [examples](examples/) for detailed benchmark simulation evaluation instructions.
 
 ## ✨ Key-Features
@@ -51,14 +49,13 @@ See [scripts/README.md](scripts/README.md) for more training commands. See [exam
     - The [Qwen3-VL bridge](vla_scratch/policies/modules/vlm_bridge/qwen/bridge.py) rewrites the forward pass to [eliminate all host-device syncs](vla_scratch/policies/README.md).
     - Layer-wise FSDP sharding and gradient checkpointing reduces memory usage, making it easier to scale model parameters.
     ![performance](assets/performance-result.png)
+- **Rich Feature Set Out-of-the-Box**
+    - Multi-source dataset co-training: VQA and robotic datasets co-training.
+    - Multi VLM backbone support: Qwen3-VL, PaliGemma 1/2, SmolVLM.
+    - Simulation-Ready Serving Scripts.
 - **Clarity-Focused Hydra Workflow for Seamless Experimentation** 
     - Every [policy](vla_scratch/policies/pi/config.py) and [data](vla_scratch/datasets/config.py) config is registered with Hydra's `ConfigStore`, so experiments are overrideable with minimal boilerplate.
     - Training, eval, and serving scripts share a common config grammar, so switching between workflows is seamless.
-
-
-## 🎯 Capabilities
-
-TODO: Heterogeneous dataset co-training (VQA, Action), Multi VLM backbone, Simulation-ready Serving scripts, feature rich visualizations, etc.
 
 ## 🗂️ Codebase Structure
 

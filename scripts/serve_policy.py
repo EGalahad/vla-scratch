@@ -223,9 +223,7 @@ def main(cfg: DictConfig) -> None:
         policy.infer(observation_in)
 
     policy.reset()
-    server = ZmqPolicyServer(
-        host=serve_cfg.host, port=serve_cfg.port
-    )
+    server = ZmqPolicyServer(host=serve_cfg.host, port=serve_cfg.port)
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)

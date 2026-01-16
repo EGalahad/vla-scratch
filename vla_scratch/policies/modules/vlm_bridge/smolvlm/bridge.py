@@ -57,10 +57,16 @@ class SmolVLMBridge(VLMBridge):
 
     def apply_fsdp(self, mp_policy, mesh):
         fully_shard_layers(
-            self.causal_model.model.vision_model.encoder.layers, mesh, mp_policy
+            self.causal_model.model.vision_model.encoder.layers,
+            mesh,
+            mp_policy,
+            num_to_prefetch=6,
         )
         fully_shard_layers(
-            self.causal_model.model.text_model.layers, mesh, mp_policy
+            self.causal_model.model.text_model.layers,
+            mesh,
+            mp_policy,
+            num_to_prefetch=6,
         )
 
     def get_text_dims(self) -> Tuple[int, int, int]:

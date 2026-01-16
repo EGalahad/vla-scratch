@@ -202,7 +202,9 @@ class PiPolicy(BasePolicy):
         )
         self.vlm_bridge.apply_fsdp(mp_policy, mesh)
 
-        fully_shard_layers(self.action_expert.blocks, mesh, mp_policy)
+        fully_shard_layers(
+            self.action_expert.blocks, mesh, mp_policy, num_to_prefetch=6
+        )
 
         mp_policy_root = MixedPrecisionPolicy(
             param_dtype=param_type,
@@ -216,6 +218,7 @@ class PiPolicy(BasePolicy):
         register_fsdp_forward_method(self, "encode_prefix")
         register_fsdp_forward_method(self, "predict_suffix")
         register_fsdp_forward_method(self, "sample_actions")
+        return self
 
     def encode_prefix(
         self, observation: "Observation"
