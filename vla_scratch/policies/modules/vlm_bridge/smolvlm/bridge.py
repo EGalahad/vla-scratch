@@ -6,6 +6,7 @@ from copy import copy
 
 import torch
 
+from vla_scratch.policies.modules.vlm_bridge.smolvlm.utils import replace_context
 from vla_scratch.policies.utils.training import (
     apply_checkpoint_when_training,
     fully_shard_layers,
@@ -57,6 +58,7 @@ class SmolVLMBridge(VLMBridge):
         head_dim = getattr(cfg, "head_dim", cfg.hidden_size // cfg.num_attention_heads)
         return cfg.num_hidden_layers, head_dim, cfg.num_key_value_heads, cfg.hidden_size
 
+    @replace_context()
     def encode(
         self,
         observation: "Observation",
@@ -75,16 +77,11 @@ class SmolVLMBridge(VLMBridge):
         input_pad_masks = policy_td.attention_mask
         target_ids = policy_td.target_ids
         pixel_values = policy_td.pixel_values
-        pixel_attention_mask = policy_td.pixel_attention_mask
         if pixel_values.ndim == 6:
             bsz, num_images, num_frames, channels, height, width = pixel_values.shape
             pixel_values = pixel_values.reshape(
                 bsz, num_images * num_frames, channels, height, width
             )
-            if pixel_attention_mask is not None and pixel_attention_mask.ndim == 5:
-                pixel_attention_mask = pixel_attention_mask.reshape(
-                    bsz, num_images * num_frames, height, width
-                )
         bsz = input_ids.shape[0]
 
         torch.cuda.nvtx.range_push("embed_text")
@@ -93,17 +90,17 @@ class SmolVLMBridge(VLMBridge):
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push("embed_image")
-        image_hidden_states = self.causal_model.model.get_image_features(
-            pixel_values, pixel_attention_mask
-        )
+        image_hidden_states = self.causal_model.model.get_image_features(pixel_values)
         image_hidden_states = image_hidden_states.to(
             inputs_embeds.device, inputs_embeds.dtype
         )
+        torch.cuda.nvtx.range_push("merge_inputs")
         merged_embeds = self.causal_model.model.inputs_merger(
             input_ids=input_ids,
             inputs_embeds=inputs_embeds,
             image_hidden_states=image_hidden_states,
         )
+        torch.cuda.nvtx.range_pop()
         torch.cuda.nvtx.range_pop()
 
         embs = [merged_embeds]
@@ -127,8 +124,10 @@ class SmolVLMBridge(VLMBridge):
         prefix_pad_masks = torch.cat(pad_masks, dim=1)
         prefix_att_masks_1d = torch.cat(att_masks, dim=0).expand(bsz, -1)
 
-        position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
-        position_ids.masked_fill_(~prefix_pad_masks.bool(), 0)
+        # position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+        # position_ids.masked_fill_(~prefix_pad_masks.bool(), 0)
+        position_ids = torch.arange(embs.shape[1], device=embs.device)
+        position_ids = position_ids.unsqueeze(0).expand(bsz, -1)
         if extra_len > 0 and zero_pos_id_for_extra:
             position_ids[:, -extra_len:] = 0
 
@@ -175,9 +174,7 @@ class SmolVLMBridge(VLMBridge):
                 decoder_layer,
                 hidden_states,
                 attention_mask=causal_mask,
-                position_ids=position_ids,
                 past_key_values=past_key_values_this_layer,
-                cache_position=cache_position,
                 position_embeddings=position_embeddings,
             )
             torch.cuda.nvtx.range_pop()

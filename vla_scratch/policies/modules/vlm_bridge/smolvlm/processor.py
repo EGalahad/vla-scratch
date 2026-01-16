@@ -18,7 +18,6 @@ class SmolVLMPolicyInput(TensorClass):
     attention_mask: torch.BoolTensor
     obs_register_att_mask: torch.BoolTensor
     pixel_values: torch.FloatTensor
-    pixel_attention_mask: torch.BoolTensor
 
 
 class SmolVLMProcessor(TransformFn):
@@ -98,22 +97,12 @@ class SmolVLMProcessor(TransformFn):
 
         obs_register_att_mask = self._build_obs_register_att_mask(encoded)
 
-        pixel_attention_mask = encoded.get("pixel_attention_mask")
-        if pixel_attention_mask is None:
-            bsz, num_images, _, height, width = encoded["pixel_values"].shape
-            pixel_attention_mask = torch.ones(
-                (bsz, num_images, height, width),
-                dtype=torch.bool,
-                device=encoded["pixel_values"].device,
-            )
-
         policy_td = SmolVLMPolicyInput(
             input_ids=encoded["input_ids"].squeeze(0).long(),
             target_ids=target_ids.squeeze(0).long(),
             attention_mask=encoded["attention_mask"].squeeze(0).bool(),
             obs_register_att_mask=obs_register_att_mask.squeeze(0).bool(),
             pixel_values=encoded["pixel_values"],
-            pixel_attention_mask=pixel_attention_mask,
         )
         sample.observation.policy_input = policy_td
         return sample
