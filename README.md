@@ -42,7 +42,7 @@ uv run scripts/serve_policy.py \
     merge_policy_cfg=true
 ```
 
-See [scripts/README.md](scripts/README.md) for more training commands. See [examples](examples/) for detailed benchmark simulation evaluation instructions.
+See [scripts/README.md](scripts/README.md) for more training commands. See [examples/libero](examples/libero/README.md) for LIBERO evaluation instructions.
 
 ## ✨ Key-Features
 
