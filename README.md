@@ -1,15 +1,13 @@
-<!-- <div align="left">
-  <h1>
-  VLA-Scratch: 
-  a Modular, Performant, Efficient Stack<br/>
-  For Vision-Language-Action Models
-  </h1>
-</div> -->
 # VLA-Scratch: a Modular, Performant, Efficient Stack For Vision-Language-Action Models
+
 [![PyTorch FSDP2](https://img.shields.io/badge/PyTorch-FSDP2-ee4c2c?logo=pytorch&logoColor=white)](https://docs.pytorch.org/docs/main/distributed.fsdp.fully_shard.html)
 [![PyTorch TensorDict](https://img.shields.io/badge/PyTorch-TensorDict-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/tensordict/)
 [![Qwen3-VL](https://img.shields.io/badge/Qwen3-VL-1d9bf0?logo=github&logoColor=white)](https://github.com/QwenLM/Qwen3-VL)
 [![Checkpoints](https://img.shields.io/badge/Checkpoints-1d9bf0?logo=huggingface&logoColor=white)](https://huggingface.co/collections/elijahgalahad/vla-scratch)
+
+VLA-Scratch is a modular, performant stack with minimal dependencies that makes training, evaluating, and serving Vision-Language-Action (VLA) models fast and approachable.
+
+---
 
 ## 🚀 Quickstart
 
@@ -44,22 +42,27 @@ uv run scripts/serve_policy.py \
 
 See [scripts/README.md](scripts/README.md) for more training commands. See [examples/libero](examples/libero/README.md) for LIBERO evaluation instructions.
 
+---
+
 ## ✨ Key-Features
 
 - **Explicit Data Model for Composable Modules** 
-    - `TensorClass` is used to define explicit data boundaries between modules, making our codebase fully typed and modular. This allows heterogeneous dataset co-training, and [clearer data flow](vla_scratch/transforms/README.md) between datasets, policies, and transforms.
+    - `TensorClass` is used to define explicit data boundaries between modules, making our codebase fully typed and modular. 
+    - This allows heterogeneous dataset co-training, and [clearer data flow](vla_scratch/transforms/README.md) between datasets, policies, and transforms.
     ![data model](assets/data_model.png)
 - **Dedicated Tuning for a First-Class Performance Stack** 
-    - The [Qwen3-VL bridge](vla_scratch/policies/modules/vlm_bridge/qwen/bridge.py) rewrites the forward pass to [eliminate all host-device syncs](vla_scratch/policies/README.md).
-    - Layer-wise FSDP sharding and gradient checkpointing reduces memory usage, making it easier to scale model parameters.
+    - We rewrite the forward pass of VLMs to [eliminate all host-device syncs](vla_scratch/policies/README.md).
+    - Instead of relying on generic libaries like `accelerate`, `vla-scratch` leverage torch native operations like FSDP2 and gradient checkpointing for dedicated performance tuning.
     ![performance](assets/performance-result.png)
 - **Rich Feature Set Out-of-the-Box**
-    - Multi-source dataset co-training: VQA and robotic datasets co-training.
-    - Multi VLM backbone support: Qwen3-VL, PaliGemma 1/2, SmolVLM.
-    - Simulation-Ready Serving Scripts.
+    - Multi-source dataset co-training: VQA and robotic datasets [co-training](examples/bbox_cotrain).
+    - Multi VLM backbone support: [Qwen3-VL](vla_scratch/policies/modules/vlm_bridge/qwen/bridge.py), [PaliGemma 1/2](vla_scratch/policies/modules/vlm_bridge/paligemma/bridge.py), [SmolVLM](vla_scratch/policies/modules/vlm_bridge/smolvlm/bridge.py).
+    - Simulation-Ready [Serving Scripts](examples/).
 - **Clarity-Focused Hydra Workflow for Seamless Experimentation** 
     - Every [policy](vla_scratch/policies/pi/config.py) and [data](vla_scratch/datasets/config.py) config is registered with Hydra's `ConfigStore`, so experiments are overrideable with minimal boilerplate.
     - Training, eval, and serving scripts share a common config grammar, so switching between workflows is seamless.
+
+---
 
 ## 🗂️ Codebase Structure
 
