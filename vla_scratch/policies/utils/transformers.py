@@ -28,13 +28,13 @@ def apply_rotary_pos_emb(
 
 @torch.compile
 def create_sinusoidal_pos_embedding(
-    time: at.Float[torch.Tensor, "b"],
+    time: at.Float[torch.Tensor, " b"],  # noqa: F722
     dimension: int,
     min_period: float,
     max_period: float,
     device="cpu",
     dtype=torch.float32,
-) -> at.Float[torch.Tensor, "b d"]:
+) -> at.Float[torch.Tensor, " b d"]:  # noqa: F722
     if dimension % 2 != 0:
         raise ValueError(f"dimension ({dimension}) must be divisible by 2")
     if time.ndim != 1:
@@ -53,9 +53,9 @@ def create_sinusoidal_pos_embedding(
 
 @torch.compile
 def make_att_2d_masks(
-    pad_masks: at.Bool[torch.Tensor, "b n"],
-    att_masks: at.Bool[torch.Tensor, "b n"],
-) -> at.Bool[torch.Tensor, "b n n"]:
+    pad_masks: at.Bool[torch.Tensor, " b n"],  # noqa: F722
+    att_masks: at.Bool[torch.Tensor, " b n"],  # noqa: F722
+) -> at.Bool[torch.Tensor, " b n n"]:  # noqa: F722
     if att_masks.ndim != 2:
         raise ValueError(att_masks.ndim)
     if pad_masks.ndim != 2:

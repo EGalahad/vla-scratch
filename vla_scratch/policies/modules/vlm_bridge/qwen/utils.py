@@ -1,4 +1,5 @@
 import torch
+from typing import cast
 import torch.nn.functional as F
 from typing import List, Optional, Tuple
 from contextlib import contextmanager
@@ -55,7 +56,8 @@ def _qwen3vl_rot_pos_emb(
     if t > 1:
         coords = coords.repeat(t, 1)
     pos_ids = einops.repeat(coords, "p d -> (b p) d", b=len(grid_thw_list))
-    result = freq_table[pos_ids].flatten(1)
+    freq_table_tensor = cast(torch.Tensor, freq_table)
+    result = freq_table_tensor[pos_ids].flatten(1)
     torch.cuda.nvtx.range_pop()
     return result
 
@@ -163,6 +165,8 @@ def _qwen3_vision_attn_fast_forward(
     # qkv = self.qkv(hidden_states).view(-1, 3, self.num_heads, self.head_dim)
     query_states, key_states, value_states = qkv.unbind(1)
 
+    if position_embeddings is None:
+        raise ValueError("position_embeddings must be provided")
     cos, sin = position_embeddings
     query_states, key_states = apply_rotary_pos_emb_vision(
         query_states, key_states, cos, sin

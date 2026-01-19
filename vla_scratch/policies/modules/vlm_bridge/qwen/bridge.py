@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 from copy import copy
-from typing import List, Optional, Tuple, TYPE_CHECKING, Dict
+from typing import List, Optional, Tuple, TYPE_CHECKING, Dict, cast
 
 import einops
 import torch
@@ -175,11 +175,13 @@ class Qwen3VLBridge(VLMBridge):
                 extra_pos_3d.zero_()
             position_ids = torch.cat([position_ids, extra_pos_3d], dim=-1)
 
-            extra_visual = torch.zeros(
-                (bsz, extra_len), dtype=image_mask.dtype, device=device
-            )
-            image_mask = torch.cat([image_mask, extra_visual], dim=1)
-            torch.cuda.nvtx.range_pop()
+        extra_visual = torch.zeros(
+            (bsz, extra_len), dtype=image_mask.dtype, device=device
+        )
+        image_mask = torch.cat(
+            [cast(torch.Tensor, image_mask), extra_visual], dim=1
+        )
+        torch.cuda.nvtx.range_pop()
 
         embs = torch.cat(embs, dim=1)
         prefix_pad_masks = torch.cat(pad_masks, dim=1)

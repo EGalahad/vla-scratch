@@ -1,9 +1,9 @@
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Iterator, List, Optional
 from collections.abc import MutableMapping
 
 from omegaconf import MISSING
+from hydra.core.config_store import ConfigStore
 
 from vla_scratch.utils.config import locate_class
 
@@ -84,8 +84,6 @@ class TrainDataCfg(MutableMapping[str, TrainDatasetCfg]):
     def __bool__(self) -> bool:
         return bool(self.datasets)
 
-
-from hydra.core.config_store import ConfigStore
 
 cs = ConfigStore.instance()
 cs.store(name="none", node=TrainDataCfg(), group="train_data")

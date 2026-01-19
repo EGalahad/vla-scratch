@@ -1,7 +1,7 @@
 import logging
 import torch
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, cast
 
 from torch.distributed.checkpoint.state_dict import (
     get_state_dict,
@@ -121,10 +121,12 @@ def merge_policy_cfg_from_checkpoint(
         return cfg
     run_dir = Path(checkpoint_path)
     cfg_path = run_dir.parent / "cfg.yaml"
-    saved_cfg = OmegaConf.load(cfg_path)
+    saved_cfg = cast(DictConfig, OmegaConf.load(cfg_path))
 
     if "policy" in saved_cfg:
-        cfg["policy"] = OmegaConf.merge(cfg.get("policy"), saved_cfg["policy"])
+        saved_policy = saved_cfg.get("policy")
+        if saved_policy is not None:
+            cfg["policy"] = OmegaConf.merge(cfg.get("policy"), saved_policy)
     return cfg
 
 

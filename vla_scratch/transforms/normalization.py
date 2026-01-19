@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from pathlib import Path
-from typing import Dict, Mapping, TYPE_CHECKING, List, Tuple, Optional
+from typing import Dict, Mapping, TYPE_CHECKING, List, Tuple, Optional, cast
 from tensordict import TensorClass
 
 from vla_scratch.utils.math import scale_transform, unscale_transform
@@ -157,7 +157,7 @@ def save_norm_stats(
         data_config, policy_config
     )
     stats_path.parent.mkdir(parents=True, exist_ok=True)
-    flat = {
+    flat: Dict[str, object] = {
         key: {
             "mean_": value.mean_.detach().cpu().numpy(),
             "std_": value.std_.detach().cpu().numpy(),
@@ -166,7 +166,7 @@ def save_norm_stats(
         }
         for key, value in stats.items()
     }
-    np.savez_compressed(stats_path, **flat)
+    np.savez_compressed(stats_path, **flat)  # type: ignore[arg-type]
     return stats_path
 
 
@@ -209,7 +209,8 @@ class Normalize(torch.nn.Module):
                     raise KeyError(f"Missing key '{key}' for normalization")
                 continue
             if (val := sample[key]) is not None:
-                normalized = self._fn(val, stats[: val.shape[0]])
+                stats_slice = cast(FieldNormStats, stats[: val.shape[0]])
+                normalized = self._fn(val, stats_slice)
                 if self.enable_aug:
                     normalized = self._apply_noise(key, normalized)
             else:
@@ -275,6 +276,8 @@ class Normalize(torch.nn.Module):
             noise_type = cfg.get("type")
             if noise_type == "gaussian":
                 std = cfg.get("std")
+                if std is None:
+                    raise ValueError("Gaussian noise config missing 'std'")
                 noise = torch.randn_like(noisy[..., span]).clamp_(
                     -3, 3
                 ) * float(std)
@@ -310,7 +313,8 @@ class DeNormalize(torch.nn.Module):
                 if self.strict:
                     raise KeyError(f"Missing key '{key}' for denormalization")
                 continue
-            sample[key] = self._fn(sample[key], stats[: sample[key].shape[0]])
+            stats_slice = cast(FieldNormStats, stats[: sample[key].shape[0]])
+            sample[key] = self._fn(sample[key], stats_slice)
         return sample
 
     @staticmethod

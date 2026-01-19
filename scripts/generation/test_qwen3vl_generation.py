@@ -116,8 +116,6 @@ def decode(
 def main() -> None:
     model_id = "Qwen/Qwen3-VL-2B-Instruct"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
-    dtype = torch.float32
 
     processor = Qwen3VLProcessor.from_pretrained(model_id)
     if hasattr(processor, "tokenizer"):

@@ -21,9 +21,7 @@ class LiberoIPECConfig(DataConfig):
             # "IPEC-COMMUNITY/libero_90_no_noops_1.0.0_lerobot",
         ]
     )
-    norm_stats_path: str = (
-        "normalization_stats/libero/IPEC-COMMUNITY/libero-horizon_{data.action_horizon}-history_{data.state_history}.npz"
-    )
+    norm_stats_path: str = "normalization_stats/libero/IPEC-COMMUNITY/libero-horizon_{data.action_horizon}-history_{data.state_history}.npz"
 
     input_transforms: List[dict] = field(
         default_factory=lambda: [
@@ -105,9 +103,7 @@ class LiberoConfig(DataConfig):
     repo_id: List[str] = field(
         default_factory=lambda: ["elijahgalahad/libero_spatial_noops_v30"]
     )
-    norm_stats_path: str = (
-        "normalization_stats/libero/lerobot-global-horizon_{data.action_horizon}-history_{data.state_history}.npz"
-    )
+    norm_stats_path: str = "normalization_stats/libero/lerobot-global-horizon_{data.action_horizon}-history_{data.state_history}.npz"
     input_transforms: List[dict] = field(
         default_factory=lambda: [
             {

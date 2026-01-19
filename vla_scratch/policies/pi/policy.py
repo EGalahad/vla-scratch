@@ -1,7 +1,7 @@
-from __future__ import annotations
-
 import time
 from typing import Tuple, TYPE_CHECKING, Dict
+import einops
+import jaxtyping as at
 
 import torch
 import torch.nn as nn
@@ -13,18 +13,13 @@ from torch.distributed.fsdp._fully_shard import (
 
 from tensordict import TensorClass
 
-import einops
-import jaxtyping as at
-
 from vla_scratch.policies.base import BasePolicy
-from vla_scratch.policies.modules.action_expert.cross_attention_dit import (
-    DiTModel,
-)
-from vla_scratch.policies.modules.vlm_bridge.paligemma.bridge import (
+from vla_scratch.policies.modules.action_expert import DiTModel
+from vla_scratch.policies.modules.vlm_bridge import (
+    Qwen3VLBridge,
     PaligemmaBridge,
+    SmolVLMBridge,
 )
-from vla_scratch.policies.modules.vlm_bridge.qwen.bridge import Qwen3VLBridge
-from vla_scratch.policies.modules.vlm_bridge.smolvlm.bridge import SmolVLMBridge
 
 from vla_scratch.policies.utils.training import (
     apply_checkpoint_when_training,
@@ -48,13 +43,15 @@ if TYPE_CHECKING:
 
 
 class SuffixInput(TensorClass):
-    prefix_pad_masks: at.Bool[torch.Tensor, "*b seq_len"]
-    hidden_state_list: at.Float[torch.Tensor, "*b n_layer seq_len hidden"]
+    prefix_pad_masks: at.Bool[torch.Tensor, " batch prefix_len"]  # noqa: F722
+    hidden_state_list: at.Float[
+        torch.Tensor, " batch n_layer prefix_len hidden"
+    ]  # noqa: F722
 
 
 class PiPolicy(BasePolicy):
-    suffix_pad_mask: at.Bool[torch.Tensor, "action_horizon"]
-    suffix_att_mask: at.Bool[torch.Tensor, "action_horizon"]
+    suffix_pad_mask: at.Bool[torch.Tensor, " action_horizon"]  # noqa: F722
+    suffix_att_mask: at.Bool[torch.Tensor, " action_horizon"]  # noqa: F722
 
     def __init__(self, config: "PiConfig"):
         super().__init__()
@@ -67,8 +64,6 @@ class PiPolicy(BasePolicy):
             )
 
         start_time = time.time()
-        # Build a bridge wrapper for this VLM; wrappers instantiate models internally
-        # if "PaliGemma" in config.vlm_type:
         if config.vlm_type == "PaliGemmaForConditionalGeneration":
             self.vlm_bridge = PaligemmaBridge(
                 model_id=config.model_id,
@@ -111,13 +106,12 @@ class PiPolicy(BasePolicy):
             self.obs_registers_att_masks = torch.zeros(
                 config.num_obs_registers, dtype=torch.bool
             )
-            self.obs_registers_att_masks[0] = (
-                1  # prevent prefix from attending to registers
-            )
+            self.obs_registers_att_masks[0] = 1
+            # prevent prefix from attending to registers
         else:
-            assert (
-                not config.expert_only_use_register
-            ), "expert_only_use_register must be False when num_obs_registers is 0."
+            assert not config.expert_only_use_register, (
+                "expert_only_use_register must be False when num_obs_registers is 0."
+            )
         action_expert_config = config.action_expert_cfg
         start_time = time.time()
         self.action_expert = DiTModel(config=action_expert_config)
@@ -274,7 +268,7 @@ class PiPolicy(BasePolicy):
 
     def predict_suffix(
         self,
-        state: at.Float[torch.Tensor, "b horizon dim"],
+        state: at.Float[torch.Tensor, " batch horizon dim"],  # noqa: F722
         suffix_input: SuffixInput,
         noisy_actions,
         time,
@@ -382,7 +376,7 @@ class PiPolicy(BasePolicy):
     @torch.inference_mode()
     def sample_actions(
         self, observation: "Observation", num_steps=10
-    ) -> at.Float[torch.Tensor, "*batch_size chunk_size action_dim"]:
+    ) -> at.Float[torch.Tensor, " batch_size action_horizon action_dim"]:  # noqa: F722
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
         torch.cuda.nvtx.range_push("VLM Encode Prefix")
         _, vlm_output, log_dict = self.encode_prefix(observation)
@@ -421,19 +415,19 @@ class PiPolicy(BasePolicy):
             torch.cuda.nvtx.range_pop()
         return x_t
 
-    def _embed_suffix(
+    def _embed_suffix(  # noqa: F722
         self,
-        state: at.Float[torch.Tensor, "*batch_size state_history state_dim"],
+        state: at.Float[torch.Tensor, " batch_size state_history state_dim"],  # noqa: F722
         noisy_actions: at.Float[
-            torch.Tensor, "*batch_size action_horizon action_dim"
-        ],
-        time: at.Float[torch.Tensor, "*batch_size"],
+            torch.Tensor, " batch_size action_horizon action_dim"
+        ],  # noqa: F722
+        time: at.Float[torch.Tensor, " batch_size"],  # noqa: F722
     ) -> Tuple[
-        at.Float[torch.Tensor, "*batch_size action_horizon hidden_dim"],
-        at.Bool[torch.Tensor, "*batch_size action_horizon"],
-        at.Bool[torch.Tensor, "*batch_size action_horizon"],
-        at.Float[torch.Tensor, "*batch_size hidden_dim"],
-    ]:
+        at.Float[torch.Tensor, " batch_size action_horizon hidden_dim"],  # noqa: F722
+        at.Bool[torch.Tensor, " batch_size action_horizon"],  # noqa: F722
+        at.Bool[torch.Tensor, " batch_size action_horizon"],  # noqa: F722
+        at.Float[torch.Tensor, " batch_size hidden_dim"],  # noqa: F722
+    ]:  # noqa: F722
         """Embed state, noisy_actions, timestep to prepare for Expert Gemma processing."""
         # Embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
 

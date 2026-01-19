@@ -14,11 +14,13 @@ TARGET_IGNORE_ID = -100
 
 
 class VLMOutputs(TensorClass):
-    last_hidden_state: at.Float[torch.Tensor, "*b seq_len hidden"]
-    prefix_pad_masks: at.Bool[torch.Tensor, "*b seq_len"]
-    key_states: at.Float[torch.Tensor, "*b n_layer n_head seq_len head_dim"]
-    value_states: at.Float[torch.Tensor, "*b n_layer n_head seq_len head_dim"]
-    hidden_state_list: at.Float[torch.Tensor, "*b n_layer seq_len hidden"]
+    last_hidden_state: at.Float[torch.Tensor, " batch seq_len hidden"]  # noqa: F722
+    prefix_pad_masks: at.Bool[torch.Tensor, " batch seq_len"]  # noqa: F722
+    key_states: at.Float[torch.Tensor, " batch n_layer n_head seq_len head_dim"]  # noqa: F722
+    value_states: at.Float[
+        torch.Tensor, " batch n_layer n_head seq_len head_dim"
+    ]  # noqa: F722
+    hidden_state_list: at.Float[torch.Tensor, " batch n_layer seq_len hidden"]  # noqa: F722
 
 
 class VLMBridge(nn.Module):

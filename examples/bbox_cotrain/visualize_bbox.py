@@ -461,7 +461,7 @@ def parse_bbox_json(bbox_json: str) -> List[Dict]:
             return []
         return bboxes
     except json.JSONDecodeError:
-        print(f"Warning: Failed to parse bbox JSON")
+        print("Warning: Failed to parse bbox JSON")
         print(f"  Raw output: {bbox_json[:200]}...")
         print(f"  Cleaned: {bbox_json_clean[:200]}...")
         return []
@@ -496,10 +496,10 @@ def visualize_bbox(
         font = ImageFont.truetype(
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size
         )
-    except:
+    except Exception:
         try:
             font = ImageFont.load_default()
-        except:
+        except Exception:
             font = None
 
     # Get image dimensions

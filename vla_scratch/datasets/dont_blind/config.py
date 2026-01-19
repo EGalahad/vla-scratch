@@ -5,6 +5,7 @@ from typing import Any, List, Optional
 from hydra.core.config_store import ConfigStore
 
 from vla_scratch.datasets.config import DataConfig
+from vla_scratch.utils.paths import REPO_ROOT
 
 
 @dataclass
@@ -56,8 +57,6 @@ dont_blind_8_8_objects_config_test = DontBlindConfig(
         ".*hamburger.*",
     ]
 )
-
-from vla_scratch.utils.paths import REPO_ROOT
 
 ours = DontBlindConfig(
     repo_id="ours",

@@ -286,6 +286,10 @@ class QwenProcessor(TransformFn):
                     else:
                         ed_video = len(input_tokens) + 1
                     if ed_image < ed_video:
+                        if image_grid_thw is None:
+                            raise ValueError(
+                                "image_grid_thw required for images"
+                            )
                         t, h, w = (
                             image_grid_thw[image_index][0],
                             image_grid_thw[image_index][1],
@@ -295,6 +299,10 @@ class QwenProcessor(TransformFn):
                         remain_images -= 1
                         ed = ed_image
                     else:
+                        if video_grid_thw is None:
+                            raise ValueError(
+                                "video_grid_thw required for videos"
+                            )
                         t, h, w = (
                             video_grid_thw[video_index][0],
                             video_grid_thw[video_index][1],

@@ -15,22 +15,22 @@ from transformers.activations import ACT2FN
 from vla_scratch.policies.utils.transformers import apply_rotary_pos_emb
 from vla_scratch.policies.utils.training import apply_checkpoint_when_training
 
-HiddenState = at.Float[torch.Tensor, "*batch_size n_q hidden_dim"]
-PositionIds = at.Int64[torch.Tensor, "*batch_size n_q"]
+HiddenState = at.Float[torch.Tensor, " batch_size n_q hidden_dim"]  # noqa: F722
+PositionIds = at.Int64[torch.Tensor, " batch_size n_q"]  # noqa: F722
 PositionEmbs = Tuple[
-    at.Float[torch.Tensor, "*batch_size n_q head_dim"],
-    at.Float[torch.Tensor, "*batch_size n_q head_dim"],
+    at.Float[torch.Tensor, " batch_size n_q head_dim"],  # noqa: F722
+    at.Float[torch.Tensor, " batch_size n_q head_dim"],  # noqa: F722
 ]
 
 
-AttentionMask = at.Bool[torch.Tensor, "*batch_size 1 n_q n_kv"]
-AdarmsCond = at.Float[torch.Tensor, "*batch_size cond_dim"]
+AttentionMask = at.Bool[torch.Tensor, " batch_size 1 n_q n_kv"]  # noqa: F722
+AdarmsCond = at.Float[torch.Tensor, " batch_size cond_dim"]  # noqa: F722
 KVCache = Tuple[
-    at.Float[torch.Tensor, "*batch_size depth n_past_kv n_kv_heads head_dim"],
-    at.Float[torch.Tensor, "*batch_size depth n_past_kv n_kv_heads head_dim"],
+    at.Float[torch.Tensor, " batch_size depth n_past_kv n_kv_heads head_dim"],  # noqa: F722
+    at.Float[torch.Tensor, " batch_size depth n_past_kv n_kv_heads head_dim"],  # noqa: F722
 ]
 
-PrefixPadMask = at.Bool[torch.Tensor, "*batch_size n_past_kv"]
+PrefixPadMask = at.Bool[torch.Tensor, " batch_size n_past_kv"]  # noqa: F722
 
 
 class LazyRMSNorm(LazyModuleMixin, torch.nn.Module):
@@ -311,12 +311,12 @@ class DecoderBlock(nn.Module):
         attention_mask: AttentionMask | None = None,
         encoder_hidden_states: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        torch.cuda.nvtx.range_push(f"adarms")
+        torch.cuda.nvtx.range_push("adarms")
         shift_msa, scale_msa, gate_msa = self.ada_mod1(adarms_cond)
         shift_mlp, scale_mlp, gate_mlp = self.ada_mod2(adarms_cond)
         torch.cuda.nvtx.range_pop()
 
-        torch.cuda.nvtx.range_push(f"attention")
+        torch.cuda.nvtx.range_push("attention")
         pre_att = modulate(
             self.input_layernorm(hidden_states), shift_msa, scale_msa
         )
@@ -339,7 +339,7 @@ class DecoderBlock(nn.Module):
         )
         torch.cuda.nvtx.range_pop()
 
-        torch.cuda.nvtx.range_push(f"mlp")
+        torch.cuda.nvtx.range_push("mlp")
         pre_mlp = modulate(
             self.post_attention_layernorm(res_att), shift_mlp, scale_mlp
         )

@@ -12,7 +12,6 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Deque, Dict, Optional, Tuple, cast, List
 
 import hydra
@@ -23,7 +22,6 @@ from omegaconf import DictConfig, OmegaConf
 
 import imageio.v2 as imageio
 import numpy as np
-import robosuite as suite
 import robosuite.utils.transform_utils as T
 
 from vla_scratch.utils.serving.zmq_policy_client import ZmqPolicyClient

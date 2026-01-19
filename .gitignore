@@ -1,8 +1,18 @@
 tests
 /datasets
+.vscode
 mjcf
 /outputs
 *.log
+
+legacy
+normalization_stats
+libero_spatial-smolvlm
+libero_spatial-paligemma
+libero_spatial-qwen
+examples/libero_global
+examples/vl-think
+AGENTS.md
 
 *.egg-info
 __pycache__

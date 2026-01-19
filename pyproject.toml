@@ -54,11 +54,5 @@ include = [
 ]
 namespaces = true
 
-[project.optional-dependencies]
-dev = [
-    "black>=24.8.0",
-]
-
-[tool.black]
+[tool.ruff]
 line-length = 80
-target-version = ["py310"]

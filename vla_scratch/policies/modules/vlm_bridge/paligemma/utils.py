@@ -1,7 +1,8 @@
+from typing import Optional
+
 import einops
 import torch
 import torch.nn.functional as F
-from contextlib import contextmanager
 from transformers.models.gemma.modeling_gemma import GemmaDecoderLayer
 from transformers.models.gemma2.modeling_gemma2 import Gemma2DecoderLayer
 from transformers.models.siglip.modeling_siglip import (
@@ -16,7 +17,7 @@ from vla_scratch.policies.utils.training import apply_checkpoint_when_training
 def _siglip_encoder_foward(
     self: "SiglipEncoder",
     inputs_embeds,
-    attention_mask: torch.Tensor = None,
+    attention_mask: Optional[torch.Tensor] = None,
     **kwargs,
 ) -> SiglipBaseModelOutput:
     hidden_states = inputs_embeds

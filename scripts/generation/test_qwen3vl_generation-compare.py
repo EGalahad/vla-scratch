@@ -7,9 +7,6 @@ from pathlib import Path
 from vla_scratch.datasets.config import DataConfig
 from vla_scratch.helpers.data import create_dataset
 from vla_scratch.policies.pi.config import pi_paligemma_config
-from vla_scratch.policies.modules.action_expert.cross_attention_dit import (
-    DiTConfig,
-)
 from vla_scratch.policies.modules.vlm_bridge.qwen.utils import (
     restore_qwen3vl_forward,
 )
@@ -20,7 +17,7 @@ from vla_scratch.transforms.data_types import DataSample
 # Allow importing helper functions when running as a script (`python tests/...`)
 _THIS_DIR = Path(__file__).resolve().parent
 sys.path.append(str(_THIS_DIR))
-from test_qwen3vl_generation import prefill, decode
+from test_qwen3vl_generation import prefill, decode  # noqa: E402
 
 
 def make_configs():

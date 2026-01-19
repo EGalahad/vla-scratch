@@ -74,3 +74,14 @@ VLA-Scratch is a fully modular, high-performance VLA stack built around TensorCl
 | [`vla_scratch/datasets/`](vla_scratch/datasets/)     | Dataset loaders and transforms               |
 | [`vla_scratch/policies/`](vla_scratch/policies/)     | Policy interfaces, bridges, and action heads |
 | [`scripts/`](scripts/)                               | Training/eval/serving scripts                |
+
+---
+
+## Development
+
+Format code:
+
+```bash
+uvx ruff format
+```
+

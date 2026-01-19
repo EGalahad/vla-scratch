@@ -1,4 +1,4 @@
-from dataclasses import dataclass, MISSING
+from dataclasses import dataclass
 from typing import Any, List, Optional
 from vla_scratch.utils.config import locate_class
 

@@ -27,7 +27,6 @@ from omegaconf import DictConfig, OmegaConf
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 from torch.distributed.tensor import DTensor
 

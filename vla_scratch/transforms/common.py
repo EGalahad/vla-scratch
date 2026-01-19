@@ -19,7 +19,7 @@ from vla_scratch.transforms.base import TransformFn
 
 
 class ToDataSample(TransformFn):
-    def compute(self, sample: Dict[str, torch.Tensor]) -> DataSample:  # type: ignore[override]
+    def compute(self, sample: Dict[str, torch.Tensor]) -> DataSample:
         observation = Observation(
             images=sample[PROCESSED_IMAGE_KEY],
             image_masks=sample[PROCESSED_IMAGE_MASK_KEY],

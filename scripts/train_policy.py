@@ -12,9 +12,6 @@ import emoji
 
 import torch
 import torch.distributed as dist
-
-torch._dynamo.config.recompile_limit = 64
-
 from tensordict import TensorDict
 
 import hydra
@@ -44,6 +41,7 @@ from vla_scratch.utils.checkpoint import (
     save_checkpoint,
     save_cfg_yaml,
 )
+import vla_scratch.configs  # noqa: F401
 
 
 if TYPE_CHECKING:
@@ -52,8 +50,8 @@ if TYPE_CHECKING:
     from vla_scratch.policies.base import BasePolicy
     from torch.distributed.fsdp._fully_shard import FSDPModule
 
+torch._dynamo.config.recompile_limit = 64
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
 torch.set_float32_matmul_precision("high")
 
 
@@ -134,8 +132,6 @@ class TrainConfig:
 cs = ConfigStore.instance()
 cs.store(name="train", node=TrainConfig())
 
-import vla_scratch.configs
-
 
 @hydra.main(config_name="train", version_base=None)
 def main(cfg: DictConfig) -> None:
@@ -161,9 +157,9 @@ def main(cfg: DictConfig) -> None:
     os.chdir(run_dir)
     setproctitle(f"{train_cfg.exp_name}")
 
-    assert (
-        train_cfg.eval_interval % train_cfg.log_interval == 0
-    ), "eval-interval must be multiple of log-interval"
+    assert train_cfg.eval_interval % train_cfg.log_interval == 0, (
+        "eval-interval must be multiple of log-interval"
+    )
 
     local_rank, global_rank, world_size, mesh = setup_dist()
     device = torch.device(type="cuda", index=local_rank)
@@ -304,7 +300,7 @@ def main(cfg: DictConfig) -> None:
 
         pbar = tqdm(
             range(steps_per_epoch),
-            desc=f"Epoch {epoch+1}/{train_cfg.epochs}",
+            desc=f"Epoch {epoch + 1}/{train_cfg.epochs}",
             disable=local_rank != 0,
         )
 
@@ -450,7 +446,7 @@ def main(cfg: DictConfig) -> None:
             epoch + 1
         ) == train_cfg.epochs:
             save_checkpoint(
-                model, optimizer, global_rank, f"checkpoint_{epoch+1}"
+                model, optimizer, global_rank, f"checkpoint_{epoch + 1}"
             )
 
     for epoch_iterator in epoch_iterators.values():

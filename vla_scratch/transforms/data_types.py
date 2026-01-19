@@ -12,9 +12,9 @@ from tensordict import TensorClass, TensorDict
 
 
 class Observation(TensorClass):
-    images: at.UInt8[torch.Tensor, "*batch num_cam 3 height width"]
-    image_masks: at.Bool[torch.Tensor, "*batch num_cam 1"]
-    state: at.Float[torch.Tensor, "*batch state_history state_dim"]
+    images: at.UInt8[torch.Tensor, " batch num_cam 3 height width"]  # noqa: F722
+    image_masks: at.Bool[torch.Tensor, " batch num_cam 1"]  # noqa: F722
+    state: at.Float[torch.Tensor, " batch state_history state_dim"]  # noqa: F722
     task: str
     generation_prompt: str
     generation_answer: str
@@ -22,7 +22,7 @@ class Observation(TensorClass):
 
 
 class ActionChunk(TensorClass):
-    actions: at.Float[torch.Tensor, "*batch action_horizon action_dim"]
+    actions: at.Float[torch.Tensor, " batch action_horizon action_dim"]  # noqa: F722
 
 
 class DataSample(TensorClass):

@@ -113,7 +113,7 @@ class PaligemmaBridge(VLMBridge):
             self, lm.embed_tokens, llm_input_ids
         )
 
-        bsz, n_cam = pixel_values.shape[0], pixel_values.shape[1]
+        bsz = pixel_values.shape[0]
         images_flat = einops.rearrange(pixel_values, "b n c h w -> (b n) c h w")
         image_features = apply_checkpoint_when_training(
             self, self.causal_model.model.get_image_features, images_flat

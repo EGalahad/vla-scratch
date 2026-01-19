@@ -230,9 +230,9 @@ class CoTrainDataset(torch.utils.data.Dataset):
 
         self.bbox_only = config.bbox_only
         self.remove_bbox = config.remove_bbox
-        assert not (
-            self.bbox_only and self.remove_bbox
-        ), "Cannot set both bbox_only and remove_bbox to True."
+        assert not (self.bbox_only and self.remove_bbox), (
+            "Cannot set both bbox_only and remove_bbox to True."
+        )
         if config.bbox_only:
             print(
                 "Filtering dataset to only include frames with bounding boxes."

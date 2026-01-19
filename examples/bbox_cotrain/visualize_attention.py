@@ -627,10 +627,10 @@ def visualize_attention(
                 "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
                 font_size,
             )
-        except:
+        except Exception:
             try:
                 font = ImageFont.load_default()
-            except:
+            except Exception:
                 font = None
 
         # Prepare text with word wrapping
