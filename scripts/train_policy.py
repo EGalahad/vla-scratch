@@ -311,7 +311,8 @@ def main(cfg: DictConfig) -> None:
         model.train()
         for i in pbar:
             torch.cuda.nvtx.range_push("Zero Grad")
-            model.unshard()
+            if hasattr(model, "unshard"):
+                model.unshard()
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.nvtx.range_pop()
 
@@ -351,7 +352,11 @@ def main(cfg: DictConfig) -> None:
             optimizer.step()
             torch.cuda.nvtx.range_pop()
 
-            log_td["loss/grad_norm"] = norm_before_clip.full_tensor()
+            # DTensor (FSDP) has .full_tensor(), regular Tensor does not
+            if hasattr(norm_before_clip, "full_tensor"):
+                log_td["loss/grad_norm"] = norm_before_clip.full_tensor()
+            else:
+                log_td["loss/grad_norm"] = norm_before_clip
             log_td = TensorDict(log_td, [])
 
             log_tds.append(log_td)
@@ -393,7 +398,8 @@ def main(cfg: DictConfig) -> None:
                     and len(eval_loaders) > 0
                 ):
                     model.eval()
-                    model.unshard()
+                    if hasattr(model, "unshard"):
+                        model.unshard()
                     for eval_key, (
                         eval_dataloader,
                         eval_type,
@@ -441,7 +447,9 @@ def main(cfg: DictConfig) -> None:
                     print(log_string)
                 if global_rank == 0:
                     run.log(log_dict)
-                dist.barrier()
+                # Synchronize all processes (only in distributed mode)
+                if dist.is_initialized():
+                    dist.barrier()
         #     if i == 36:
         #         break
         # break

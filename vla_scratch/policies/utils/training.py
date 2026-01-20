@@ -37,10 +37,15 @@ def fully_shard_layers(
     mp_policy,
     num_to_prefetch: int = 2,
 ) -> None:
-    for layer in layers:
+    # Skip FSDP if mesh is None (non-distributed mode)
+    if mesh is None:
+        return
+    
+    layers_list = list(layers)
+    for layer in layers_list:
         fully_shard(layer, mesh=mesh, mp_policy=mp_policy)
     set_forward_backward_prefetch(
-        layers,
+        layers_list,
         num_to_backward_prefetch=num_to_prefetch,
         num_to_forward_prefetch=num_to_prefetch,
     )

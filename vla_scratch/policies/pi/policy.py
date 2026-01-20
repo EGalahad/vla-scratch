@@ -194,6 +194,10 @@ class PiPolicy(BasePolicy):
 
     def apply_fsdp(self, param_type, reduce_type, output_dtype, mesh):
         """Helper function to apply FSDP to a module with given mixed precision policy."""
+        
+        # Skip FSDP if mesh is None (non-distributed mode)
+        if mesh is None:
+            return self
 
         mp_policy = MixedPrecisionPolicy(
             param_dtype=param_type,
