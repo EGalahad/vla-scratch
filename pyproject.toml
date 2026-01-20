@@ -12,8 +12,6 @@ description = "Utilities for working with VLA Scratch datasets and policies."
 requires-python = "==3.10.*"
 dependencies = [
     "torch",
-    "torchvision",
-    "triton",
     "numpy",
     "jaxtyping",
     "tqdm",
@@ -34,12 +32,6 @@ dependencies = [
     # serve policy
     "pyzmq",
     "msgpack",
-    "matplotlib",
-    # the last commit before dataset version 3.0
-    "lerobot @ git+https://github.com/huggingface/lerobot@v0.4.2",
-    "av",  # pyav for video decoding (alternative to torchcodec)
-    "accelerate",
-    "mujoco",
     "art",
     "emoji>=2.15.0",
     
@@ -62,22 +54,5 @@ include = [
 ]
 namespaces = true
 
-[tool.uv]
-required-environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
-index-strategy = "unsafe-best-match"
-override-dependencies = ["torch", "torchvision"]
-
-[[tool.uv.index]]
-name = "pytorch-nightly-cu128"
-url = "https://download.pytorch.org/whl/nightly/cu128"
-default = true
-
-[[tool.uv.index]]
-url = "https://pypi.org/simple"
-
-[tool.uv.sources]
-torch = { index = "pytorch-nightly-cu128" }
-torchvision = { index = "pytorch-nightly-cu128" }
-triton = { index = "pytorch-nightly-cu128" }
-
-# python-install-mirror = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+[tool.ruff]
+line-length = 80
