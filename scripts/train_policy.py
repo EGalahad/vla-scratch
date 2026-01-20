@@ -446,7 +446,9 @@ def main(cfg: DictConfig) -> None:
                     print(log_string)
                 if global_rank == 0:
                     run.log(log_dict)
-                dist.barrier()
+                # Synchronize all processes (only in distributed mode)
+                if dist.is_initialized():
+                    dist.barrier()
         #     if i == 36:
         #         break
         # break

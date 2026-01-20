@@ -2,20 +2,21 @@
 
 ## Files at a Glance
 
-| Path                      | Description                                         |
-|---------------------------|-----------------------------------------------------|
-| `config.py`               | Hydra `PolicyConfig` definitions and registrations. |
-| `pi/`                     | Pi policy implementation (config + model).          |
-| `modules/action_expert/*` | Flow matching action head.                          |
-| `modules/vlm_bridge/*`    | VLM bridge for Paligemma, Qwen, SmolVLM, etc.       |
-| `utils/`                  | Policy-related utilities.                           |
+| Path                     | Description                                 |
+|--------------------------|---------------------------------------------|
+| `base.py`                | `BasePolicy` interface.                     |
+| `config.py`              | Hydra `PolicyConfig` definitions.           |
+| `modules/action_expert/` | Flow matching action head.                  |
+| `modules/vlm_bridge/`    | VLM bridge for Paligemma, Qwen and SmolVLM. |
+| `pi/`                    | Policy implementation (config + model).     |
+| `utils/`                 | Training utilities.                         |
 
 
 ## Core Execution Flow
 
 1. Policies expose `encode_prefix` and `predict_suffix`; `compute_loss` and `sample_actions` compose those primitives during training and serving.
 2. `encode_prefix` calls the chosen VLM bridge to produce [`VLMOutputs`](../../vla_scratch/policies/modules/vlm_bridge/data_types.py).
-3. VLM bridge expects `Observation.policy_input` to be prepared by its matching processor (e.g., `QwenBridge` with `QwenProcessor`), ensuring VLM model-specific tensors are present before the forward pass.
+3. Each VLM bridge expects `Observation.policy_input` to be prepared by its matching processor (e.g., `QwenBridge` with `QwenProcessor`), ensuring model-specific tensors are present before the forward pass.
 4. `predict_suffix` consumes `VLMOutputs`, denoises Gaussian noises to predict flow matching velocity via the action expert head.
 5. Layer-wise FSDP sharding and gradient checkpointing are applied with `apply_fsdp` through helpers in `utils/training.py`.
 
@@ -37,6 +38,11 @@ def pos_embed_interpolate(self, grid_thw):
         h_idxs = torch.arange(0, h, self.step)
         w_idxs = torch.arange(0, w, self.step)
 </code></pre>
+
+Related code in HF Transformers:
+1. [rot_pos_emb](https://github.com/huggingface/transformers/blob/314f10929a2215b74c2ad6ecf7b2f380c9b7468a/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L643)
+2. [fast_pos_embed_interpolate](https://github.com/huggingface/transformers/blob/314f10929a2215b74c2ad6ecf7b2f380c9b7468a/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L682)
+
 </td>
 <td width="30%" valign="center">
 <img src="../../assets/policies/performance-reduction-1.png" width="100%" alt="Reduction #1">
@@ -62,6 +68,9 @@ for token in input_ids:
     if token == image_token_id:
         ...
 </code></pre>
+
+Related code in HF Transformers:
+1. [get_rope_index](https://github.com/huggingface/transformers/blob/314f10929a2215b74c2ad6ecf7b2f380c9b7468a/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L993)
 </td>
 <td width="30%" valign="center">
 <img src="../../assets/policies/performance-reduction-2.png" width="100%" alt="Reduction #2">
@@ -88,6 +97,9 @@ global_delta = torch.zeros_like(hidden_states)
 global_delta.masked_scatter_(visual_pos_masks.unsqueeze(-1), visual_embeds)
 hidden_states = hidden_states + global_delta
 </code></pre>
+
+Related code in HF Transformers:
+1. [_deepstack_process](https://github.com/huggingface/transformers/blob/314f10929a2215b74c2ad6ecf7b2f380c9b7468a/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L915)
 </td>
 </tr>
 </table>

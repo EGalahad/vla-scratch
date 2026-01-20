@@ -75,11 +75,11 @@ See [scripts/README.md](scripts/README.md) for more training commands. See [exam
 
 ---
 
-## Development
+## 🧭 Developer Guide
 
-Format code:
-
-```bash
-uvx ruff format
-```
-
+| Use Case               | Where to go                                                                                                                                                                                                                                                                                                                                                                                         |
+|------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Create a new dataset   | 1) Create a new folder, e.g. [`vla_scratch/datasets/<dataset_name>`](vla_scratch/datasets/).<br>2) Add implementation and configs (e.g. `dataset.py`, `config.py`).<br>3) Register the dataset config with Hydra `ConfigStore` in `config.py` under the `data` group.                                                                                                                               |
+| Add a new VLM backbone | 1) Create a new folder under [`vla_scratch/policies/modules/vlm_bridge/`](vla_scratch/policies/modules/vlm_bridge/).<br>2) Implement preprocessing in `processor.py`, define the `policy_input` contract between preprocessing and encoding, and implement the main encoding in `bridge.py`.<br>3) Wire the backbone into [`vla_scratch/policies/pi/policy.py`](vla_scratch/policies/pi/policy.py). |
+| Add a new loss term    | 1) Add the loss inside `compute_loss` in [`vla_scratch/policies/pi/policy.py`](vla_scratch/policies/pi/policy.py)<br>2) Return it in `log_dict` so it is logged to Weights & Biases.                                                                                                                                                                                                                |
+| Format code            | Run `uvx ruff format`.                                                                                                                                                                                                                                                                                                                                                                              |
