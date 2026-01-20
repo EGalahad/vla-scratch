@@ -31,10 +31,19 @@ def set_forward_backward_prefetch(
         layer.set_modules_to_backward_prefetch(layers_to_prefetch)
 
 
-def fully_shard_layers(layers: Iterable["torch.nn.Module"], mesh, mp_policy) -> None:
+def fully_shard_layers(
+    layers: Iterable["torch.nn.Module"],
+    mesh,
+    mp_policy,
+    num_to_prefetch: int = 2,
+) -> None:
     for layer in layers:
         fully_shard(layer, mesh=mesh, mp_policy=mp_policy)
-    set_forward_backward_prefetch(layers, 2, 2)
+    set_forward_backward_prefetch(
+        layers,
+        num_to_backward_prefetch=num_to_prefetch,
+        num_to_forward_prefetch=num_to_prefetch,
+    )
 
 
 def apply_checkpoint_when_training(

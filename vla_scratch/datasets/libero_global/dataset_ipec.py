@@ -3,7 +3,10 @@ from typing import TYPE_CHECKING
 
 import torch
 import numpy as np
-from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotDataset
+from lerobot.datasets.lerobot_dataset import (
+    LeRobotDatasetMetadata,
+    LeRobotDataset,
+)
 
 from .data_keys import (
     CAM_FRONT_KEY,
@@ -16,7 +19,12 @@ from .data_keys import (
     ARM_CMD_CART_ROT_KEY,
     GRIPPER_CMD_ACTION_KEY,
 )
-from vla_scratch.utils.math import unscale_transform, quat_from_angle_axis, quat_mul, axis_angle_from_quat
+from vla_scratch.utils.math import (
+    unscale_transform,
+    quat_from_angle_axis,
+    quat_mul,
+    axis_angle_from_quat,
+)
 
 if TYPE_CHECKING:
     from vla_scratch.datasets.libero.config import LiberoIPECConfig
@@ -39,7 +47,8 @@ class IPECDataset(torch.utils.data.Dataset):
 
         delta_timestamps = {
             "action": (
-                np.linspace(0, action_horizon - 1, action_horizon, dtype=int) / fps
+                np.linspace(0, action_horizon - 1, action_horizon, dtype=int)
+                / fps
             ).tolist(),
             "observation.state": (
                 np.linspace(
@@ -52,7 +61,11 @@ class IPECDataset(torch.utils.data.Dataset):
             ).tolist(),
         }
         self.lerobot_datasets = [
-            LeRobotDataset(repo_id=repo_id, delta_timestamps=delta_timestamps)
+            LeRobotDataset(
+                repo_id=repo_id,
+                delta_timestamps=delta_timestamps,
+                video_backend=config.video_backend,
+            )
             for repo_id in config.repo_id
         ]
         assert fps == self.lerobot_datasets[0].fps
@@ -70,8 +83,8 @@ class IPECDataset(torch.utils.data.Dataset):
         item = self.lerobot_datasets[dataset_idx][frame_in_dataset]
 
         full_state = item.pop("observation.state")
-        history_state = full_state[:self.state_history + 1]
-        future_state = full_state[self.state_history:]
+        history_state = full_state[: self.state_history + 1]
+        future_state = full_state[self.state_history :]
 
         actions = item.pop("action")
         actions[:, -1] = 1 - 2 * actions[:, -1]  # convert [0, 1] to [1, -1]

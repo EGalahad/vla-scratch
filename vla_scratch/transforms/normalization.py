@@ -19,13 +19,14 @@ class FieldNormStats(TensorClass):
     q01: torch.Tensor
     q99: torch.Tensor
 
+
 NormStats = Dict[str, FieldNormStats]
 
 _HF_PREFIX = "hf:"
 
 
 def _parse_hf_path(path: str) -> tuple[str, str, Optional[str]]:
-    raw = path[len(_HF_PREFIX):]
+    raw = path[len(_HF_PREFIX) :]
     if not raw:
         raise ValueError("Expected hf:org/repo[/subpath] in norm_stats_path.")
 
@@ -75,11 +76,15 @@ def _resolve_norm_stats_dir(path_str: str) -> Path:
     return _resolve_local_dir(path_str)
 
 
-def _norm_stats_filename(data_cfg: "DataConfig", policy_cfg: "PolicyConfig") -> str:
+def _norm_stats_filename(
+    data_cfg: "DataConfig", policy_cfg: "PolicyConfig"
+) -> str:
     horizon = data_cfg.action_horizon or policy_cfg.action_horizon
     history = data_cfg.state_history or policy_cfg.state_history
     if horizon is None or history is None:
-        raise ValueError("Both action_horizon and state_history must be set for norm stats.")
+        raise ValueError(
+            "Both action_horizon and state_history must be set for norm stats."
+        )
 
     target = getattr(data_cfg, "_target_", "dataset")
     base = str(target).split(".")[-1]
@@ -89,12 +94,16 @@ def _norm_stats_filename(data_cfg: "DataConfig", policy_cfg: "PolicyConfig") -> 
     return f"{base}-horizon_{horizon}-history_{history}.npz"
 
 
-def load_norm_stats(data_cfg: "DataConfig", policy_cfg: "PolicyConfig") -> NormStats:
+def load_norm_stats(
+    data_cfg: "DataConfig", policy_cfg: "PolicyConfig"
+) -> NormStats:
     stats_path_str = resolve_config_placeholders(
         data_cfg.norm_stats_path, data_cfg=data_cfg, policy_cfg=policy_cfg
     )
     if stats_path_str is None:
-        raise ValueError("norm_stats_path must be set to load normalization stats.")
+        raise ValueError(
+            "norm_stats_path must be set to load normalization stats."
+        )
     stats_dir = _resolve_norm_stats_dir(str(stats_path_str))
     if stats_dir.is_file():
         stats_path = stats_dir
@@ -144,7 +153,9 @@ def save_norm_stats(
     policy_config: "PolicyConfig",
     stats: NormStats,
 ) -> Path:
-    stats_path = Path(output_dir) / _norm_stats_filename(data_config, policy_config)
+    stats_path = Path(output_dir) / _norm_stats_filename(
+        data_config, policy_config
+    )
     stats_path.parent.mkdir(parents=True, exist_ok=True)
     flat = {
         key: {
@@ -166,31 +177,39 @@ class Normalize(torch.nn.Module):
         *,
         use_quantiles: bool = True,
         strict: bool = False,
-        noise_cfg: Optional[Mapping[str, Mapping[str, Dict[str, float]]]] = None,
+        noise_cfg: Optional[
+            Mapping[str, Mapping[str, Dict[str, float]]]
+        ] = None,
         enable_aug: bool = False,
     ) -> None:
         super().__init__()
         self.norm_stats = norm_stats
         self.use_quantiles = use_quantiles
         self.strict = strict
-        self._fn = self._normalize_quantile if use_quantiles else self._normalize
+        self._fn = (
+            self._normalize_quantile if use_quantiles else self._normalize
+        )
         self._noise_cfg = self._prepare_noise_cfg(noise_cfg)
         self.enable_aug = enable_aug
         if self._noise_cfg:
-            missing_norm_keys = [k for k in self._noise_cfg if k not in self.norm_stats]
+            missing_norm_keys = [
+                k for k in self._noise_cfg if k not in self.norm_stats
+            ]
             if missing_norm_keys:
                 raise KeyError(
                     f"Noise requested for keys without normalization stats: {missing_norm_keys}"
                 )
 
-    def compute(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def compute(
+        self, sample: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
         for key, stats in self.norm_stats.items():
             if key not in sample:
                 if self.strict:
                     raise KeyError(f"Missing key '{key}' for normalization")
                 continue
             if (val := sample[key]) is not None:
-                normalized = self._fn(val, stats[:val.shape[0]])
+                normalized = self._fn(val, stats[: val.shape[0]])
                 if self.enable_aug:
                     normalized = self._apply_noise(key, normalized)
             else:
@@ -218,12 +237,14 @@ class Normalize(torch.nn.Module):
                 f"Noise range '{range_key}' must be formatted as 'start-end'"
             ) from exc
         if end <= start:
-            raise ValueError(f"Noise range '{range_key}' must satisfy end > start")
+            raise ValueError(
+                f"Noise range '{range_key}' must satisfy end > start"
+            )
         return start, end
 
     @staticmethod
     def _prepare_noise_cfg(
-        noise_cfg: Optional[Mapping[str, Mapping[str, Dict[str, float]]]]
+        noise_cfg: Optional[Mapping[str, Mapping[str, Dict[str, float]]]],
     ) -> Dict[str, List[Tuple[slice, Dict[str, float]]]]:
         if noise_cfg is None:
             return {}
@@ -231,7 +252,9 @@ class Normalize(torch.nn.Module):
         prepared: Dict[str, List[Tuple[slice, Dict[str, float]]]] = {}
         for target_key, ranges in noise_cfg.items():
             if not isinstance(ranges, Mapping):
-                raise TypeError("Noise config entries must be mappings of ranges to cfgs")
+                raise TypeError(
+                    "Noise config entries must be mappings of ranges to cfgs"
+                )
 
             parsed_ranges: List[Tuple[slice, Dict[str, float]]] = []
             for range_key, cfg in ranges.items():
@@ -252,11 +275,16 @@ class Normalize(torch.nn.Module):
             noise_type = cfg.get("type")
             if noise_type == "gaussian":
                 std = cfg.get("std")
-                noise = torch.randn_like(noisy[..., span]).clamp_(-3, 3) * float(std)
+                noise = torch.randn_like(noisy[..., span]).clamp_(
+                    -3, 3
+                ) * float(std)
                 noisy[..., span] = noisy[..., span] + noise
             else:
-                raise ValueError(f"Unsupported noise type '{noise_type}' for key '{key}'")
+                raise ValueError(
+                    f"Unsupported noise type '{noise_type}' for key '{key}'"
+                )
         return noisy
+
 
 class DeNormalize(torch.nn.Module):
     def __init__(
@@ -270,19 +298,25 @@ class DeNormalize(torch.nn.Module):
         self.norm_stats = norm_stats
         self.use_quantiles = use_quantiles
         self.strict = strict
-        self._fn = self._denormalize_quantile if use_quantiles else self._denormalize
+        self._fn = (
+            self._denormalize_quantile if use_quantiles else self._denormalize
+        )
 
-    def compute(self, sample: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def compute(
+        self, sample: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
         for key, stats in self.norm_stats.items():
             if key not in sample:
                 if self.strict:
                     raise KeyError(f"Missing key '{key}' for denormalization")
                 continue
-            sample[key] = self._fn(sample[key], stats[:sample[key].shape[0]])
+            sample[key] = self._fn(sample[key], stats[: sample[key].shape[0]])
         return sample
 
     @staticmethod
-    def _denormalize(tensor: torch.Tensor, stats: FieldNormStats) -> torch.Tensor:
+    def _denormalize(
+        tensor: torch.Tensor, stats: FieldNormStats
+    ) -> torch.Tensor:
         return tensor.clamp(-1.5, 1.5) * (stats.std_ + 1e-6) + stats.mean_
 
     @staticmethod

@@ -38,9 +38,13 @@ def create_sinusoidal_pos_embedding(
     if dimension % 2 != 0:
         raise ValueError(f"dimension ({dimension}) must be divisible by 2")
     if time.ndim != 1:
-        raise ValueError("The time tensor is expected to be of shape `(batch_size,)`.")
+        raise ValueError(
+            "The time tensor is expected to be of shape `(batch_size,)`."
+        )
 
-    fraction = torch.linspace(0.0, 1.0, dimension // 2, dtype=dtype, device=device)
+    fraction = torch.linspace(
+        0.0, 1.0, dimension // 2, dtype=dtype, device=device
+    )
     period = min_period * (max_period / min_period) ** fraction
     scaling_factor = 1.0 / period * 2 * torch.pi
     sin_input = scaling_factor[None, :] * time[:, None]

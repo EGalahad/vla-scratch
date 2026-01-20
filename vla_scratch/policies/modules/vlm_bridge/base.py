@@ -20,6 +20,7 @@ class VLMOutputs(TensorClass):
     value_states: at.Float[torch.Tensor, "*b n_layer n_head seq_len head_dim"]
     hidden_state_list: at.Float[torch.Tensor, "*b n_layer seq_len hidden"]
 
+
 class VLMBridge(nn.Module):
     causal_model: nn.Module
 

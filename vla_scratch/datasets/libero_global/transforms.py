@@ -111,16 +111,22 @@ class LiberoActionToLocal(TransformFn):
         current_quat_w = quat_from_angle_axis(current_angle, current_rotvec_w)
 
         # transform cmd into local frame of current pose
-        current_quat_w_expand = current_quat_w.unsqueeze(0).expand_as(cmd_quat_w)
+        current_quat_w_expand = current_quat_w.unsqueeze(0).expand_as(
+            cmd_quat_w
+        )
         cmd_pos_local = quat_apply_inverse(
             current_quat_w_expand, cmd_pos_w - current_pos_w
         )
-        cmd_quat_local = quat_mul(quat_conjugate(current_quat_w_expand), cmd_quat_w)
+        cmd_quat_local = quat_mul(
+            quat_conjugate(current_quat_w_expand), cmd_quat_w
+        )
         cmd_mat_local = matrix_from_quat(cmd_quat_local)
         cmd_ori6d_local = rotation_matrix_to_6d(cmd_mat_local)
 
         cmd_grippers = sample[GRIPPER_CMD_ACTION_KEY]
-        actions_out = torch.cat([cmd_pos_local, cmd_ori6d_local, cmd_grippers], dim=-1)
+        actions_out = torch.cat(
+            [cmd_pos_local, cmd_ori6d_local, cmd_grippers], dim=-1
+        )
 
         sample[PROCESSED_ACTION_KEY] = actions_out
         return sample
@@ -150,7 +156,9 @@ class LiberoActionToGlobal(TransformFn):
         cmd_mat_local = rotation_6d_to_matrix(cmd_ori6d_local)
         cmd_quat_local = quat_from_matrix(cmd_mat_local)
 
-        current_quat_w_expand = current_quat_w.unsqueeze(0).expand_as(cmd_quat_local)
+        current_quat_w_expand = current_quat_w.unsqueeze(0).expand_as(
+            cmd_quat_local
+        )
         cmd_pos_w = current_pos_w.unsqueeze(0) + quat_apply(
             current_quat_w_expand, cmd_pos_local
         )

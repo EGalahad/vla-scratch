@@ -22,8 +22,12 @@ class CoTrainConfig(DataConfig):
     norm_stats_path: str = "hf:elijahgalahad/norm_stats-bbox-cotrain"
 
 
-train_cotrain_config = CoTrainConfig(repo_id="horipse01/lerobot_merged_restricted")
-test_cotrain_config = CoTrainConfig(repo_id="horipse01/lerobot_merged_restricted_val")
+train_cotrain_config = CoTrainConfig(
+    repo_id="horipse01/lerobot_merged_restricted"
+)
+test_cotrain_config = CoTrainConfig(
+    repo_id="horipse01/lerobot_merged_restricted_val"
+)
 
 cs = ConfigStore.instance()
 cs.store(name="bbox_cotrain_train", node=train_cotrain_config, group="data")

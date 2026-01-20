@@ -18,7 +18,8 @@ from vla_scratch.policies.utils.training import apply_checkpoint_when_training
 HiddenState = at.Float[torch.Tensor, "*batch_size n_q hidden_dim"]
 PositionIds = at.Int64[torch.Tensor, "*batch_size n_q"]
 PositionEmbs = Tuple[
-    at.Float[torch.Tensor, "*batch_size n_q head_dim"], at.Float[torch.Tensor, "*batch_size n_q head_dim"]
+    at.Float[torch.Tensor, "*batch_size n_q head_dim"],
+    at.Float[torch.Tensor, "*batch_size n_q head_dim"],
 ]
 
 
@@ -49,7 +50,9 @@ class LazyRMSNorm(LazyModuleMixin, torch.nn.Module):
 
 
 @torch.compile
-def modulate(x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor) -> torch.Tensor:
+def modulate(
+    x: torch.Tensor, shift: torch.Tensor, scale: torch.Tensor
+) -> torch.Tensor:
     return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 
@@ -70,13 +73,17 @@ class AdaptiveModulation(nn.Module):
 
 @torch.compile
 def gated_activation(
-    x: torch.Tensor, y: torch.Tensor, act: Callable[[torch.Tensor], torch.Tensor]
+    x: torch.Tensor,
+    y: torch.Tensor,
+    act: Callable[[torch.Tensor], torch.Tensor],
 ) -> torch.Tensor:
     return act(x) * y
 
 
 class MLP(nn.Module):
-    def __init__(self, hidden_size: int, intermediate_size: int, activation: str):
+    def __init__(
+        self, hidden_size: int, intermediate_size: int, activation: str
+    ):
         super().__init__()
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
@@ -87,7 +94,9 @@ class MLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # gated = self.act_fn(self.gate_proj(x)) * self.up_proj(x)
-        gated = gated_activation(self.gate_proj(x), self.up_proj(x), self.act_fn)
+        gated = gated_activation(
+            self.gate_proj(x), self.up_proj(x), self.act_fn
+        )
         return self.down_proj(gated)
 
 
@@ -96,7 +105,9 @@ class RotaryEmbedding(nn.Module):
         self, head_dim: int, max_position_embeddings: int, base: float
     ) -> None:
         super().__init__()
-        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
+        inv_freq = 1.0 / (
+            base ** (torch.arange(0, head_dim, 2).float() / head_dim)
+        )
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.max_position_embeddings = max_position_embeddings
 
@@ -179,7 +190,9 @@ class Attention(nn.Module):
             config.hidden_size,
             bias=config.attention_bias,
         )
-        qk_norm_type = config.qk_norm.lower() if config.qk_norm is not None else None
+        qk_norm_type = (
+            config.qk_norm.lower() if config.qk_norm is not None else None
+        )
         if qk_norm_type is None:
             self.q_norm = None
             self.k_norm = None
@@ -240,7 +253,9 @@ class Attention(nn.Module):
 
         if position_embeddings is not None:
             cos, sin = position_embeddings
-            q_rotate, k_rotate = apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1)
+            q_rotate, k_rotate = apply_rotary_pos_emb(
+                q, k, cos, sin, unsqueeze_dim=1
+            )
         else:
             q_rotate, k_rotate = q, k
 
@@ -257,6 +272,7 @@ class Attention(nn.Module):
             attn_output, "b h seq_q d -> b seq_q (h d)"
         ).contiguous()
         return self.o_proj(attn_output), (k_rotate, v)
+
 
 class DecoderBlock(nn.Module):
     def __init__(self, config: DiTConfig, layer_idx: int):
@@ -301,9 +317,13 @@ class DecoderBlock(nn.Module):
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push(f"attention")
-        pre_att = modulate(self.input_layernorm(hidden_states), shift_msa, scale_msa)
+        pre_att = modulate(
+            self.input_layernorm(hidden_states), shift_msa, scale_msa
+        )
         if encoder_hidden_states is not None:
-            encoder_hidden_states = self.encoder_layernorm(encoder_hidden_states)
+            encoder_hidden_states = self.encoder_layernorm(
+                encoder_hidden_states
+            )
         out_att, (k, v) = self.attn.forward(
             pre_att,
             position_embeddings=position_embeddings,
@@ -311,18 +331,26 @@ class DecoderBlock(nn.Module):
             encoder_hidden_states=encoder_hidden_states,
         )
         if self.attn_dropout > 0.0:
-            out_att = torch.dropout(out_att, p=self.attn_dropout, train=self.training)
+            out_att = torch.dropout(
+                out_att, p=self.attn_dropout, train=self.training
+            )
         res_att = hidden_states + einops.einsum(
             out_att, gate_msa, "b s d, b d -> b s d"
         )
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push(f"mlp")
-        pre_mlp = modulate(self.post_attention_layernorm(res_att), shift_mlp, scale_mlp)
+        pre_mlp = modulate(
+            self.post_attention_layernorm(res_att), shift_mlp, scale_mlp
+        )
         out_mlp = self.mlp(pre_mlp)
         if self.mlp_dropout > 0.0:
-            out_mlp = torch.dropout(out_mlp, p=self.mlp_dropout, train=self.training)
-        res_mlp = res_att + einops.einsum(out_mlp, gate_mlp, "b s d, b d -> b s d")
+            out_mlp = torch.dropout(
+                out_mlp, p=self.mlp_dropout, train=self.training
+            )
+        res_mlp = res_att + einops.einsum(
+            out_mlp, gate_mlp, "b s d, b d -> b s d"
+        )
         torch.cuda.nvtx.range_pop()
         return res_mlp, (k, v)
 
@@ -387,7 +415,9 @@ class DiTModel(nn.Module):
             )
         assert attention_mask.shape[-2] == inputs_embeds.shape[1]
         encoder_seq_len = encoder_hidden_states[0].shape[1]
-        assert attention_mask.shape[-1] == encoder_seq_len + inputs_embeds.shape[1]
+        assert (
+            attention_mask.shape[-1] == encoder_seq_len + inputs_embeds.shape[1]
+        )
         attention_mask = attention_mask[..., :encoder_seq_len]
 
         cos, sin = self.rotary_emb(position_ids, dtype=inputs_embeds.dtype)
@@ -400,7 +430,9 @@ class DiTModel(nn.Module):
                 if self.config.only_attend_to_final_layer:
                     encoder_hidden_this_layer = encoder_hidden_states[-1]
                 else:
-                    encoder_hidden_this_layer = encoder_hidden_states[i // cross_every]
+                    encoder_hidden_this_layer = encoder_hidden_states[
+                        i // cross_every
+                    ]
                 attention_mask_this_layer = attention_mask
                 pos_emb_this_layer = None
             else:

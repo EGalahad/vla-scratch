@@ -40,7 +40,9 @@ class PaligemmaBridge(VLMBridge):
         try:
             vlm_cls = getattr(tfm, vlm_type)
         except AttributeError as e:
-            raise ImportError(f"transformers has no class named '{vlm_type}'.") from e
+            raise ImportError(
+                f"transformers has no class named '{vlm_type}'."
+            ) from e
 
         self.causal_model: "PaliGemmaForConditionalGeneration" = (
             vlm_cls.from_pretrained(
@@ -59,9 +61,13 @@ class PaligemmaBridge(VLMBridge):
 
     def apply_fsdp(self, mp_policy, mesh):
         fully_shard_layers(
-            self.causal_model.vision_tower.vision_model.encoder.layers, mesh, mp_policy
+            self.causal_model.vision_tower.vision_model.encoder.layers,
+            mesh,
+            mp_policy,
         )
-        fully_shard_layers(self.causal_model.language_model.layers, mesh, mp_policy)
+        fully_shard_layers(
+            self.causal_model.language_model.layers, mesh, mp_policy
+        )
 
     def get_text_dims(self) -> Tuple[int, int, int]:
         cfg = self.causal_model.config.text_config
@@ -84,7 +90,9 @@ class PaligemmaBridge(VLMBridge):
     ) -> Tuple[torch.Tensor, VLMOutputs, Dict]:
         policy_td: "PaligemmaPolicyInput" = observation.policy_input
         if not isinstance(policy_td, PaligemmaPolicyInput):
-            raise TypeError("Observation policy_input must be PaligemmaPolicyInput")
+            raise TypeError(
+                "Observation policy_input must be PaligemmaPolicyInput"
+            )
         pixel_values = policy_td.pixel_values
         input_ids = policy_td.input_ids
         input_pad_masks = policy_td.attention_mask
@@ -101,24 +109,36 @@ class PaligemmaBridge(VLMBridge):
         else:
             llm_input_ids = input_ids
 
-        inputs_embeds = apply_checkpoint_when_training(self, lm.embed_tokens, llm_input_ids)
+        inputs_embeds = apply_checkpoint_when_training(
+            self, lm.embed_tokens, llm_input_ids
+        )
 
         bsz, n_cam = pixel_values.shape[0], pixel_values.shape[1]
         images_flat = einops.rearrange(pixel_values, "b n c h w -> (b n) c h w")
         image_features = apply_checkpoint_when_training(
             self, self.causal_model.model.get_image_features, images_flat
         )
-        image_features = image_features.to(inputs_embeds.device, inputs_embeds.dtype)
+        image_features = image_features.to(
+            inputs_embeds.device, inputs_embeds.dtype
+        )
 
         image_token_mask = input_ids == self.causal_model.config.image_token_id
-        special_image_mask = image_token_mask.unsqueeze(-1).expand_as(inputs_embeds)
-        inputs_embeds = inputs_embeds.masked_scatter(special_image_mask, image_features)
+        special_image_mask = image_token_mask.unsqueeze(-1).expand_as(
+            inputs_embeds
+        )
+        inputs_embeds = inputs_embeds.masked_scatter(
+            special_image_mask, image_features
+        )
         torch.cuda.nvtx.range_pop()
 
         embs = [inputs_embeds]
         pad_masks = [input_pad_masks]
         att_masks = [
-            torch.ones(inputs_embeds.shape[1], dtype=torch.bool, device=inputs_embeds.device),
+            torch.ones(
+                inputs_embeds.shape[1],
+                dtype=torch.bool,
+                device=inputs_embeds.device,
+            ),
         ]
 
         extra_len = 0
@@ -177,7 +197,10 @@ class PaligemmaBridge(VLMBridge):
         pred_logits = einops.rearrange(pred_logits[:, :-1], "b s v -> (b s) v")
         target_ids = einops.rearrange(target_ids[:, 1:], "b s -> (b s)")
         ce_loss_sum = torch.nn.functional.cross_entropy(
-            pred_logits, target_ids, ignore_index=TARGET_IGNORE_ID, reduction="sum"
+            pred_logits,
+            target_ids,
+            ignore_index=TARGET_IGNORE_ID,
+            reduction="sum",
         )
         num_correct_tokens = (pred_logits.argmax(dim=-1) == target_ids).sum()
         total = (target_ids != TARGET_IGNORE_ID).sum().clamp(min=1)

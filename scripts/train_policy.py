@@ -12,7 +12,7 @@ import emoji
 
 import torch
 import torch.distributed as dist
-from torch.optim.lr_scheduler import CosineAnnealingLR
+
 torch._dynamo.config.recompile_limit = 64
 
 from tensordict import TensorDict
@@ -85,13 +85,10 @@ class TrainConfig:
     batch_size: int = 16
     grad_accum_steps: int = 1
 
+    low_mem: bool = False
+
     # Learning rates keyed by module path; "base" applies to remaining params
     lr: dict[str, float] = field(default_factory=lambda: {"base": 3e-6})
-    # Linearly ramp LR from 0 to base LR over this many optimizer steps (0 disables)
-    warmup_steps: int = 0
-    # LR scheduling: start cosine anneal from the last N epochs
-    # Set to 0 to disable cosine annealing
-    cosine_anneal_epoch: int = 0
 
     betas: Tuple[float] = (0.99, 0.9999)
     eps: float = 1e-8
@@ -100,7 +97,7 @@ class TrainConfig:
     clip_grad_norm: float = 1.0
 
     # logging and evaluation
-    exp_name: str = "pi-training"
+    exp_name: str = "vla-scratch-training"
     log_interval: int = 32
     eval_interval: int = 512
     epochs: int = 20
@@ -138,6 +135,8 @@ cs = ConfigStore.instance()
 cs.store(name="train", node=TrainConfig())
 
 import vla_scratch.configs
+
+
 @hydra.main(config_name="train", version_base=None)
 def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
@@ -154,7 +153,9 @@ def main(cfg: DictConfig) -> None:
     now = datetime.datetime.now()
     date_stamp = now.strftime("%Y-%m-%d")
     time_stamp = now.strftime("%H-%M-%S")
-    run_dir = Path("./outputs") / date_stamp / f"{time_stamp}-{train_cfg.exp_name}"
+    run_dir = (
+        Path("./outputs") / date_stamp / f"{time_stamp}-{train_cfg.exp_name}"
+    )
     run_dir = run_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     os.chdir(run_dir)
@@ -184,7 +185,9 @@ def main(cfg: DictConfig) -> None:
         first_loader = next(iter(train_loaders.values()))
         dummy_data, _ = next(iter(first_loader))
     except RuntimeError as e:
-        print("If you see input ids shape incompatible errors here, please increase the max_length in processor config in vla_scratch/policies/pi/config.py!")
+        print(
+            "If you see input ids shape incompatible errors here, please increase the max_length in processor config in vla_scratch/policies/pi/config.py!"
+        )
         raise e
     dummy_data: "DataSample" = dummy_data[0:1].to(device)
     train_cfg.policy.action_dim = dummy_data.action_chunk.actions.shape[-1]
@@ -199,14 +202,15 @@ def main(cfg: DictConfig) -> None:
     loss.backward()
 
     model.initialize_weights()
+    if train_cfg.low_mem:
+        model = model.bfloat16()
 
-    model.apply_fsdp(
+    model: "FSDPModule" | "BasePolicy" = model.apply_fsdp(
         param_type=torch.bfloat16,
-        reduce_type=torch.float32,
         output_dtype=torch.float32,
+        reduce_type=torch.bfloat16 if train_cfg.low_mem else torch.float32,
         mesh=mesh,
     )
-    model: "FSDPModule" | "BasePolicy"
 
     if train_cfg.train_data:
         train_batch_sizes_by_name = {
@@ -215,7 +219,9 @@ def main(cfg: DictConfig) -> None:
     else:
         train_batch_sizes_by_name = {"train": train_cfg.batch_size}
     total_batch_size = sum(train_batch_sizes_by_name.values())
-    global_batch_size = total_batch_size * train_cfg.grad_accum_steps * world_size
+    global_batch_size = (
+        total_batch_size * train_cfg.grad_accum_steps * world_size
+    )
 
     lr_cfg = dict(train_cfg.lr)
     param_groups = build_param_lr_groups(model, lr_cfg)
@@ -259,17 +265,14 @@ def main(cfg: DictConfig) -> None:
         saved_cfg.world_size = world_size
         run.config.update(OmegaConf.to_container(saved_cfg, resolve=True))
 
-        default_run_name = (
-            f"{train_cfg.exp_name}-{datetime.datetime.now().strftime('%m-%d-%H-%M')}"
-        )
+        default_run_name = f"{train_cfg.exp_name}-{datetime.datetime.now().strftime('%m-%d-%H-%M')}"
         run_idx = run.name.split("-")[-1]
         run.name = f"{run_idx}-{default_run_name}"
 
         cfg_path = save_cfg_yaml(saved_cfg, run_dir)
         run.save(str(cfg_path), base_path=str(run_dir))
-        
+
     global_step = 0
-    scheduler = None
     steps_per_epoch_by_name = {
         name: max(1, len(loader) // train_cfg.grad_accum_steps)
         for name, loader in train_loaders.items()
@@ -298,22 +301,6 @@ def main(cfg: DictConfig) -> None:
             name: next(epoch_iterator)
             for name, epoch_iterator in epoch_iterators.items()
         }
-        # Initialize cosine annealing at the start of the first scheduled epoch
-        if (
-            scheduler is None
-            and train_cfg.cosine_anneal_epoch > 0
-            and epoch >= train_cfg.epochs - train_cfg.cosine_anneal_epoch
-        ):
-            # Number of remaining optimizer steps including this epoch
-            remaining_epochs = train_cfg.epochs - epoch
-            cosine_steps = max(1, steps_per_epoch * remaining_epochs)
-            # Start cosine anneal from current LR down to 1e-7 by training end
-
-            scheduler = CosineAnnealingLR(
-                optimizer,
-                T_max=cosine_steps,
-                eta_min=1e-7,
-            )
 
         pbar = tqdm(
             range(steps_per_epoch),
@@ -333,8 +320,12 @@ def main(cfg: DictConfig) -> None:
                 for train_key, data_loader_iter in data_loader_iters.items():
                     torch.cuda.nvtx.range_push("DataLoader")
                     data_sample, perf_dict = next(data_loader_iter)
-                    data_sample: "DataSample" = data_sample.to(device, non_blocking=True)
-                    perf_dict: TensorDict = perf_dict.to(device, non_blocking=True)
+                    data_sample: "DataSample" = data_sample.to(
+                        device, non_blocking=True
+                    )
+                    perf_dict: TensorDict = perf_dict.to(
+                        device, non_blocking=True
+                    )
                     torch.cuda.nvtx.range_pop()
 
                     loss, log_dict = model.compute_loss(data_sample)
@@ -342,8 +333,14 @@ def main(cfg: DictConfig) -> None:
                     (loss / train_cfg.grad_accum_steps / world_size).backward()
                     torch.cuda.nvtx.range_pop()
 
-                    log_dict = {f"{key.split('/')[0]}/{train_key}.{key.split('/')[1]}": val for key, val in log_dict.items()}
-                    perf_dict = {f"loading/{train_key}.{key}": val for key, val in perf_dict.mean(dim=0).items()}
+                    log_dict = {
+                        f"{key.split('/')[0]}/{train_key}.{key.split('/')[1]}": val
+                        for key, val in log_dict.items()
+                    }
+                    perf_dict = {
+                        f"loading/{train_key}.{key}": val
+                        for key, val in perf_dict.mean(dim=0).items()
+                    }
                     log_td.update(log_dict)
                     log_td.update(perf_dict)
 
@@ -351,15 +348,7 @@ def main(cfg: DictConfig) -> None:
             norm_before_clip: "DTensor" = torch.nn.utils.clip_grad_norm_(
                 model.parameters(), max_norm=train_cfg.clip_grad_norm
             )
-            # Linear warmup: ramp LR from 0 to base_lr over warmup_steps
-            if train_cfg.warmup_steps and global_step < train_cfg.warmup_steps:
-                warmup_factor = float(global_step + 1) / float(train_cfg.warmup_steps)
-                for group in optimizer.param_groups:
-                    target_lr = group["initial_lr"]
-                    group["lr"] = target_lr * warmup_factor
             optimizer.step()
-            if scheduler is not None:
-                scheduler.step()
             torch.cuda.nvtx.range_pop()
 
             log_td["loss/grad_norm"] = norm_before_clip.full_tensor()
@@ -381,7 +370,9 @@ def main(cfg: DictConfig) -> None:
                     log_dict[f"{train_key}.epoch"] = (
                         global_step / steps_per_epoch_by_name[train_key]
                     )
-                    log_dict[f"{train_key}.samples"] = global_step * train_global_batch
+                    log_dict[f"{train_key}.samples"] = (
+                        global_step * train_global_batch
+                    )
                 for group in optimizer.param_groups:
                     log_dict[f"lr/{group['name']}"] = group["lr"]
 
@@ -397,10 +388,16 @@ def main(cfg: DictConfig) -> None:
                 log_td_mean: TensorDict = torch.stack(log_tds).mean(dim=0)
                 log_tds.clear()
 
-                if global_step % train_cfg.eval_interval == 0 and len(eval_loaders) > 0:
+                if (
+                    global_step % train_cfg.eval_interval == 0
+                    and len(eval_loaders) > 0
+                ):
                     model.eval()
                     model.unshard()
-                    for eval_key, (eval_dataloader, eval_type) in eval_loaders.items():
+                    for eval_key, (
+                        eval_dataloader,
+                        eval_type,
+                    ) in eval_loaders.items():
                         if eval_type == "sample_mse":
                             eval_metrics = eval_sample_mse(
                                 model=model,
@@ -422,7 +419,9 @@ def main(cfg: DictConfig) -> None:
                             )
 
                         for metric_name in eval_metrics.keys():
-                            log_td_mean[f"eval/{eval_key}.{metric_name}"] = eval_metrics[metric_name]
+                            log_td_mean[f"eval/{eval_key}.{metric_name}"] = (
+                                eval_metrics[metric_name]
+                            )
                     model.reshard()
                     model.train()
 
@@ -443,9 +442,16 @@ def main(cfg: DictConfig) -> None:
                 if global_rank == 0:
                     run.log(log_dict)
                 dist.barrier()
+        #     if i == 36:
+        #         break
+        # break
 
-        if (epoch + 1) % train_cfg.save_interval == 0:
-            save_checkpoint(model, optimizer, global_rank, f"checkpoint_{epoch+1}")
+        if (epoch + 1) % train_cfg.save_interval == 0 or (
+            epoch + 1
+        ) == train_cfg.epochs:
+            save_checkpoint(
+                model, optimizer, global_rank, f"checkpoint_{epoch+1}"
+            )
 
     for epoch_iterator in epoch_iterators.values():
         if hasattr(epoch_iterator, "finalize"):

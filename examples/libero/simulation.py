@@ -78,12 +78,15 @@ def _image_to_chw(image: np.ndarray, *, rotate: bool = True) -> np.ndarray:
     return img
 
 
-def _state_from_obs(obs: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _state_from_obs(
+    obs: Dict[str, Any],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     pos = np.asarray(obs["robot0_eef_pos"], dtype=np.float32)
     quat = np.asarray(obs["robot0_eef_quat"], dtype=np.float32)
     rotvec = np.asarray(T.quat2axisangle(quat), dtype=np.float32)
     grip = np.asarray(
-        obs.get("robot0_gripper_qpos", np.zeros(2, dtype=np.float32)), dtype=np.float32
+        obs.get("robot0_gripper_qpos", np.zeros(2, dtype=np.float32)),
+        dtype=np.float32,
     )
     return pos, rotvec, grip
 
@@ -103,18 +106,24 @@ def _frame_from_obs(obs: Dict[str, Any], *, rotate_images: bool) -> np.ndarray:
 def _build_policy_sample(
     obs: Dict[str, Any],
     task_description: str,
-    state_buffers: Tuple[Deque[np.ndarray], Deque[np.ndarray], Deque[np.ndarray]],
+    state_buffers: Tuple[
+        Deque[np.ndarray], Deque[np.ndarray], Deque[np.ndarray]
+    ],
     rotate_images: bool,
 ) -> Dict[str, Any]:
     pos_hist, rot_hist, grip_hist = state_buffers
     cam_front = _image_to_chw(obs["agentview_image"], rotate=rotate_images)
-    cam_wrist = _image_to_chw(obs["robot0_eye_in_hand_image"], rotate=rotate_images)
+    cam_wrist = _image_to_chw(
+        obs["robot0_eye_in_hand_image"], rotate=rotate_images
+    )
     img = np.stack([cam_front, cam_wrist], axis=0)
     img = (img * 255).astype(np.uint8, copy=False)
     img_mask = np.ones((img.shape[0], 1), dtype=bool)
     pos_stack = np.stack(list(pos_hist), axis=0).astype(np.float32, copy=False)
     rot_stack = np.stack(list(rot_hist), axis=0).astype(np.float32, copy=False)
-    grip_stack = np.stack(list(grip_hist), axis=0).astype(np.float32, copy=False)
+    grip_stack = np.stack(list(grip_hist), axis=0).astype(
+        np.float32, copy=False
+    )
     state = np.concatenate([pos_stack, rot_stack, grip_stack], axis=-1)[1:]
     return {
         PROCESSED_IMAGE_KEY: img,
@@ -160,7 +169,10 @@ def rollout_task(
     start_time = time.monotonic()
     for step in range(cfg.max_steps):
         sample = _build_policy_sample(
-            obs, task_description, (pos_hist, rot_hist, grip_hist), cfg.rotate_images
+            obs,
+            task_description,
+            (pos_hist, rot_hist, grip_hist),
+            cfg.rotate_images,
         )
         if cfg.video_path:
             frames.append(_frame_from_obs(obs, rotate_images=cfg.rotate_images))
@@ -245,7 +257,9 @@ def main(cfg: DictConfig) -> None:
         task = task_suite.get_task(task_id)
         env_args = {
             "bddl_file_name": os.path.join(
-                get_libero_path("bddl_files"), task.problem_folder, task.bddl_file
+                get_libero_path("bddl_files"),
+                task.problem_folder,
+                task.bddl_file,
             ),
             "camera_heights": args.camera_resolution,
             "camera_widths": args.camera_resolution,

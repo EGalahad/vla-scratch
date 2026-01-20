@@ -32,7 +32,10 @@ def _siglip_encoder_foward(
 
 
 def _gemma_decoder_layer_custom_forward(
-    self: "GemmaDecoderLayer", hidden_states, prefix_att_mask, position_embeddings
+    self: "GemmaDecoderLayer",
+    hidden_states,
+    prefix_att_mask,
+    position_embeddings,
 ):
     """Custom forward for a GemmaDecoderLayer used in prefix encoding.
 
@@ -81,11 +84,14 @@ def _gemma_decoder_layer_custom_forward(
     torch.cuda.nvtx.range_pop()
     return res_mlp, (k_rotate, v)
 
+
 def _gemma2_decoder_layer_custom_forward(
-    self: "Gemma2DecoderLayer", hidden_states, prefix_att_mask, position_embeddings
+    self: "Gemma2DecoderLayer",
+    hidden_states,
+    prefix_att_mask,
+    position_embeddings,
 ):
-    """Custom forward for a GemmaDecoderLayer used in prefix encoding.
-    """
+    """Custom forward for a GemmaDecoderLayer used in prefix encoding."""
     redisual = hidden_states
 
     pre_att = self.input_layernorm(hidden_states)
@@ -131,6 +137,7 @@ def _gemma2_decoder_layer_custom_forward(
     res_mlp = res_att + out_mlp
     torch.cuda.nvtx.range_pop()
     return res_mlp, (k_rotate, v)
+
 
 orig_gemma_layer_forward = GemmaDecoderLayer.forward
 orig_gemma2_layer_forward = Gemma2DecoderLayer.forward

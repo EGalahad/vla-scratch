@@ -23,7 +23,10 @@ def prefill(
     device: torch.device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Prefill pass that returns cache, cache_position, attention_mask, and next token."""
-    content: List[Dict] = [{"type": "image", "image": image}, {"type": "text", "text": prompt}]
+    content: List[Dict] = [
+        {"type": "image", "image": image},
+        {"type": "text", "text": prompt},
+    ]
     messages = [{"role": "user", "content": content}]
 
     encoded = processor.apply_chat_template(
@@ -38,17 +41,27 @@ def prefill(
             "return_tensors": "pt",
         },
     )
-    model_inputs = {k: v.to(device) if torch.is_tensor(v) else v for k, v in encoded.items()}
+    model_inputs = {
+        k: v.to(device) if torch.is_tensor(v) else v for k, v in encoded.items()
+    }
 
     with torch.inference_mode():
         outputs = model(**model_inputs, use_cache=True)
 
     hidden_states = outputs.hidden_states
     past_key_values = outputs.past_key_values
-    cache_position = torch.tensor([model_inputs["input_ids"].shape[1]], device=device)
+    cache_position = torch.tensor(
+        [model_inputs["input_ids"].shape[1]], device=device
+    )
     attention_mask = model_inputs["attention_mask"]
     next_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
-    return hidden_states, past_key_values, cache_position, attention_mask, next_token
+    return (
+        hidden_states,
+        past_key_values,
+        cache_position,
+        attention_mask,
+        next_token,
+    )
 
 
 def decode(
@@ -70,7 +83,14 @@ def decode(
         for _ in range(max_new_tokens):
             generated_ids.append(next_token)
             attention_mask = torch.cat(
-                [attention_mask, torch.ones((attention_mask.shape[0], 1), device=device, dtype=attention_mask.dtype)],
+                [
+                    attention_mask,
+                    torch.ones(
+                        (attention_mask.shape[0], 1),
+                        device=device,
+                        dtype=attention_mask.dtype,
+                    ),
+                ],
                 dim=1,
             )
 
@@ -84,7 +104,9 @@ def decode(
             past_key_values = decode_outputs.past_key_values
             cache_position = cache_position + 1
 
-            next_token = decode_outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            next_token = decode_outputs.logits[:, -1, :].argmax(
+                dim=-1, keepdim=True
+            )
             if next_token.item() == eos_token_id:
                 break
 
@@ -101,17 +123,27 @@ def main() -> None:
     if hasattr(processor, "tokenizer"):
         processor.tokenizer.padding_side = "left"
 
-    model = Qwen3VLForConditionalGeneration.from_pretrained(
-        model_id,
-        # dtype=dtype,
-        attn_implementation="sdpa",
-        trust_remote_code=True,
-    ).eval().to(device)
+    model = (
+        Qwen3VLForConditionalGeneration.from_pretrained(
+            model_id,
+            # dtype=dtype,
+            attn_implementation="sdpa",
+            trust_remote_code=True,
+        )
+        .eval()
+        .to(device)
+    )
 
     image = build_demo_image()
     prompt = "Describe the image in English."
-    hidden_states, kv_cache, cache_position, attention_mask, next_token = prefill(
-        image=image, prompt=prompt, model=model, processor=processor, device=device
+    hidden_states, kv_cache, cache_position, attention_mask, next_token = (
+        prefill(
+            image=image,
+            prompt=prompt,
+            model=model,
+            processor=processor,
+            device=device,
+        )
     )
     decoded = decode(
         model=model,

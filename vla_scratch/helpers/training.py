@@ -13,7 +13,16 @@ from torch.utils.data import DataLoader, DistributedSampler
 import datetime
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Set, Tuple, Iterator, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Mapping,
+    Set,
+    Tuple,
+    Iterator,
+    Optional,
+)
 from omegaconf import DictConfig, OmegaConf
 import torch
 import torch.distributed as dist
@@ -26,6 +35,7 @@ from vla_scratch.helpers.data import create_dataset
 from vla_scratch.utils.dataloader import DistributedRankAwareBatchSampler
 
 from tensordict import TensorDict
+
 if TYPE_CHECKING:
     from scripts.train_policy import TrainConfig
     from vla_scratch.policies.base import BasePolicy
@@ -150,7 +160,9 @@ def _subset_dataset(
     total_samples = len(dataset)
     subset_size = max(1, int(total_samples * fraction))
     generator = torch.Generator().manual_seed(seed)
-    indices = torch.randperm(total_samples, generator=generator)[:subset_size].tolist()
+    indices = torch.randperm(total_samples, generator=generator)[
+        :subset_size
+    ].tolist()
     return torch.utils.data.Subset(dataset, indices)
 
 
@@ -158,7 +170,9 @@ def _normalize_cfg_for_hash(value: Any) -> Any:
     if is_dataclass(value):
         return _normalize_cfg_for_hash(asdict(value))
     if isinstance(value, DictConfig):
-        return _normalize_cfg_for_hash(OmegaConf.to_container(value, resolve=True))
+        return _normalize_cfg_for_hash(
+            OmegaConf.to_container(value, resolve=True)
+        )
     if isinstance(value, Path):
         return str(value)
     if isinstance(value, ABCMapping):
@@ -195,7 +209,8 @@ def create_dataloaders(
     dataset_cache: Dict[str, torch.utils.data.Dataset] = {}
     if len(train_cfg.train_data.keys()) > 0:
         train_items = [
-            (key, data.data, data.batch_size) for key, data in train_cfg.train_data.items()
+            (key, data.data, data.batch_size)
+            for key, data in train_cfg.train_data.items()
         ]
     else:
         train_items = [("train", train_cfg.data, train_cfg.batch_size)]
@@ -239,7 +254,9 @@ def create_dataloaders(
         data_cfg.state_history = train_cfg.policy.state_history
 
         dataset = get_or_create_dataset(data_cfg, add_noise=False)
-        dataset = _subset_dataset(dataset, eval_cfg.eval_fraction, seed=extra_eval_seed + idx)
+        dataset = _subset_dataset(
+            dataset, eval_cfg.eval_fraction, seed=extra_eval_seed + idx
+        )
         eval_loader = _create_dataloader(
             dataset=dataset,
             shuffle=False,
@@ -294,14 +311,21 @@ def build_param_lr_groups(
         if not params:
             continue
 
-        param_groups.append({"params": params, "lr": float(lr), "name": module_path})
+        param_groups.append(
+            {"params": params, "lr": float(lr), "name": module_path}
+        )
         used_params.update(id(p) for p in params)
 
     remaining_params = [
-        p for p in model.parameters() if p.requires_grad and id(p) not in used_params
+        p
+        for p in model.parameters()
+        if p.requires_grad and id(p) not in used_params
     ]
     if remaining_params:
-        base_group: dict[str, Any] = {"params": remaining_params, "name": "base"}
+        base_group: dict[str, Any] = {
+            "params": remaining_params,
+            "name": "base",
+        }
         if base_lr is not None:
             base_group["lr"] = float(base_lr)
         param_groups.append(base_group)
@@ -461,7 +485,9 @@ def _format_dtype_bytes(dtype_bytes: dict[torch.dtype, int]) -> str:
         return "none"
     parts = [
         f"{dtype.__str__().replace('torch.', '')}={bytes_ / (1024**2):.2f}MB"
-        for dtype, bytes_ in sorted(dtype_bytes.items(), key=lambda x: x[0].__str__())
+        for dtype, bytes_ in sorted(
+            dtype_bytes.items(), key=lambda x: x[0].__str__()
+        )
     ]
     return ", ".join(parts)
 
@@ -474,14 +500,14 @@ def log_model_state_sizes(
     buffers = list(policy.buffers())
     grads = [p.grad for p in params if p.grad is not None]
 
-    param_bytes_local, param_bytes_global, param_dtype_bytes = _accumulate_tensor_stats(
-        params
+    param_bytes_local, param_bytes_global, param_dtype_bytes = (
+        _accumulate_tensor_stats(params)
     )
     buffer_bytes_local, buffer_bytes_global, buffer_dtype_bytes = (
         _accumulate_tensor_stats(buffers)
     )
-    grad_bytes_local, grad_bytes_global, grad_dtype_bytes = _accumulate_tensor_stats(
-        grads
+    grad_bytes_local, grad_bytes_global, grad_dtype_bytes = (
+        _accumulate_tensor_stats(grads)
     )
     optim_bytes_local = 0
     optim_dtype_bytes: dict[torch.dtype, int] = {}
@@ -495,9 +521,14 @@ def log_model_state_sizes(
         return num_bytes / (1024**2)
 
     total_bytes_local = (
-        param_bytes_local + buffer_bytes_local + grad_bytes_local + optim_bytes_local
+        param_bytes_local
+        + buffer_bytes_local
+        + grad_bytes_local
+        + optim_bytes_local
     )
-    total_bytes_global = param_bytes_global + buffer_bytes_global + grad_bytes_global
+    total_bytes_global = (
+        param_bytes_global + buffer_bytes_global + grad_bytes_global
+    )
     # global means full model, not sum over all ranks
     msg = (
         "Tensor sizes (MB): "
@@ -578,7 +609,9 @@ class PrefetchingEpochIterator(Iterator[Iterator]):
         if self.dataloader.persistent_workers and not final:
             # do not shutdown workers if persistent
             return
-        if self.current_iter is not None and hasattr(self.current_iter, "_shutdown_workers"):
+        if self.current_iter is not None and hasattr(
+            self.current_iter, "_shutdown_workers"
+        ):
             self.current_iter._shutdown_workers()  # type: ignore[attr-defined]
         self.current_iter = None
 
@@ -619,7 +652,9 @@ class EagerEpochIterator(Iterator[Iterator]):
         if self.dataloader.persistent_workers and not final:
             # do not shutdown workers if persistent
             return
-        if self.current_iter is not None and hasattr(self.current_iter, "_shutdown_workers"):
+        if self.current_iter is not None and hasattr(
+            self.current_iter, "_shutdown_workers"
+        ):
             self.current_iter._shutdown_workers()  # type: ignore[attr-defined]
         self.current_iter = None
 

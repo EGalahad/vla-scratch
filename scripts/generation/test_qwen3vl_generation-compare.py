@@ -7,8 +7,12 @@ from pathlib import Path
 from vla_scratch.datasets.config import DataConfig
 from vla_scratch.helpers.data import create_dataset
 from vla_scratch.policies.pi.config import pi_paligemma_config
-from vla_scratch.policies.modules.action_expert.cross_attention_dit import DiTConfig
-from vla_scratch.policies.modules.vlm_bridge.qwen.utils import restore_qwen3vl_forward
+from vla_scratch.policies.modules.action_expert.cross_attention_dit import (
+    DiTConfig,
+)
+from vla_scratch.policies.modules.vlm_bridge.qwen.utils import (
+    restore_qwen3vl_forward,
+)
 
 from vla_scratch.policies.pi.policy import PiPolicy
 from vla_scratch.transforms.data_types import DataSample
@@ -73,17 +77,28 @@ def main() -> None:
         prefix_pad_masks = vlm_outputs.prefix_pad_masks
         key_states = vlm_outputs.key_states
         value_states = vlm_outputs.value_states
-        logits = policy.vlm_bridge.causal_model.lm_head(hidden_states_bridge[:, -1:, :])
+        logits = policy.vlm_bridge.causal_model.lm_head(
+            hidden_states_bridge[:, -1:, :]
+        )
         next_tok_bridge = logits[:, -1, :].argmax(dim=-1, keepdim=True)
     restore_qwen3vl_forward()
-    
+
     cache_pos_bridge = torch.tensor([prefix_pad_masks.shape[1]], device=device)
     attn_mask_bridge = prefix_pad_masks
-    kv_cache_list = [(k, v) for k, v in zip(key_states.unbind(dim=1), value_states.unbind(dim=1))]
+    kv_cache_list = [
+        (k, v)
+        for k, v in zip(key_states.unbind(dim=1), value_states.unbind(dim=1))
+    ]
     kv_cache_bridge = DynamicCache.from_legacy_cache(tuple(kv_cache_list))
 
     # Baseline via HF prefill using the same model + processor
-    hidden_states_prefill, kv_prefill, cache_pos_prefill, attn_mask_prefill, next_tok_prefill = prefill(
+    (
+        hidden_states_prefill,
+        kv_prefill,
+        cache_pos_prefill,
+        attn_mask_prefill,
+        next_tok_prefill,
+    ) = prefill(
         image=observation.images[0],
         prompt=observation.task,
         model=policy.vlm_bridge.causal_model,
@@ -99,11 +114,19 @@ def main() -> None:
         k_close = torch.allclose(bk, hk, atol=1e-3, rtol=1e-3)
         v_close = torch.allclose(bv, hv, atol=1e-3, rtol=1e-3)
         matches.append((k_close, v_close))
-        print(f"Layer {idx}: keys match={k_close}, values match={v_close}, shape={bk.shape}")
+        print(
+            f"Layer {idx}: keys match={k_close}, values match={v_close}, shape={bk.shape}"
+        )
 
-    print(f"Next token bridge vs prefill: {next_tok_bridge.item()} vs {next_tok_prefill.item()}")
-    print(f"Attention mask equal: {torch.equal(attn_mask_bridge, attn_mask_prefill)}")
-    print(f"Cache position bridge vs prefill: {cache_pos_bridge.item()} vs {cache_pos_prefill.item()}")
+    print(
+        f"Next token bridge vs prefill: {next_tok_bridge.item()} vs {next_tok_prefill.item()}"
+    )
+    print(
+        f"Attention mask equal: {torch.equal(attn_mask_bridge, attn_mask_prefill)}"
+    )
+    print(
+        f"Cache position bridge vs prefill: {cache_pos_bridge.item()} vs {cache_pos_prefill.item()}"
+    )
 
     decoded_bridge = policy.vlm_bridge.processor.decode(
         torch.cat([next_tok_bridge], dim=-1)[0]

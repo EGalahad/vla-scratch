@@ -20,7 +20,7 @@ class BasePolicy(nn.Module, ABC):
 
     def initialize_weights(self):
         pass
-    
+
     @abstractmethod
     def encode_prefix(
         self,
@@ -52,7 +52,7 @@ class BasePolicy(nn.Module, ABC):
         num_steps: int,
     ) -> torch.Tensor:
         """Sample actions in evaluation/serving mode."""
-        
+
     @abstractmethod
     def compute_loss(
         self,
@@ -60,8 +60,8 @@ class BasePolicy(nn.Module, ABC):
     ) -> Tuple[torch.Tensor, Dict]:
         """Compute training loss between predicted and target actions."""
 
-    def apply_fsdp(self, *args, **kwargs) -> None:  # pragma: no cover - optional hook
+    def apply_fsdp(
+        self, *args, **kwargs
+    ) -> None:  # pragma: no cover - optional hook
         """Optional shard hook for policies that support FSDP."""
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not implement FSDP sharding."
-        )
+        return self

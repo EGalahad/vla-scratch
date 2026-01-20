@@ -10,6 +10,7 @@ from tensordict import TensorClass, TensorDict
 # the dataset is responsible for preparing the generation prompt and answer.
 # currently only support for Qwen3VL bbox detection.
 
+
 class Observation(TensorClass):
     images: at.UInt8[torch.Tensor, "*batch num_cam 3 height width"]
     image_masks: at.Bool[torch.Tensor, "*batch num_cam 1"]

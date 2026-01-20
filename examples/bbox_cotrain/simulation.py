@@ -17,6 +17,7 @@ from hydra.core.config_store import ConfigStore
 from omegaconf import DictConfig, OmegaConf
 
 import sys
+
 sys.path.append(".")
 from vla_scratch.utils.serving.zmq_policy_client import ZmqPolicyClient
 from vla_scratch.transforms.data_keys import (
@@ -28,6 +29,7 @@ from vla_scratch.transforms.data_keys import (
     GENERATION_PROMPT_KEY,
     GENERATION_ANSWER_KEY,
 )
+
 # from vla_scratch.datasets.libero.data_keys import (
 #     ARM_STATE_CART_POS_KEY,
 #     ARM_STATE_CART_ROT_KEY,
@@ -36,6 +38,7 @@ from vla_scratch.transforms.data_keys import (
 
 
 from mani_skill.envs import *  # noqa: F401,F403
+
 
 @dataclass
 class BboxCotrainEvalConfig:
@@ -91,6 +94,7 @@ def build_payload(
         # GRIPPER_STATE_QPOS_KEY: np.zeros((batch, state_history + 1, 1), dtype=np.float32),
     }
 
+
 def _build_env(args: BboxCotrainEvalConfig) -> gym.Env:
     new_width, new_height = 640, 480
     scale_x = new_width / 640.0
@@ -126,19 +130,26 @@ def _build_env(args: BboxCotrainEvalConfig) -> gym.Env:
     return gym.make(**env_kwargs)
 
 
-def _maybe_tensor_action(action: np.ndarray, env: gym.Env) -> torch.Tensor | np.ndarray:
+def _maybe_tensor_action(
+    action: np.ndarray, env: gym.Env
+) -> torch.Tensor | np.ndarray:
     if not hasattr(env.unwrapped, "device"):
         return action
-    action_tensor = torch.as_tensor(action, dtype=torch.float32, device=env.unwrapped.device)
+    action_tensor = torch.as_tensor(
+        action, dtype=torch.float32, device=env.unwrapped.device
+    )
     if action_tensor.ndim == 1:
         action_tensor = action_tensor.unsqueeze(0)
     return action_tensor
 
 
 def _is_done(terminated: Any, truncated: Any) -> bool:
-    if isinstance(terminated, torch.Tensor) or isinstance(truncated, torch.Tensor):
+    if isinstance(terminated, torch.Tensor) or isinstance(
+        truncated, torch.Tensor
+    ):
         return bool(torch.any(terminated) or torch.any(truncated))
     return bool(np.any(terminated) or np.any(truncated))
+
 
 def _frame_from_obs(obs: Dict[str, Any]) -> np.ndarray:
     frame = obs["sensor_data"]["3rd_view_camera"]["rgb"]
@@ -163,19 +174,29 @@ def main(cfg: DictConfig) -> None:
     client = ZmqPolicyClient(host=args.host, port=args.port)
     shared_episode_id: Optional[int] = None
     if args.same_init:
-        shared_episode_id = int(np.random.RandomState(args.seed).randint(0, 1_000_000_000))
+        shared_episode_id = int(
+            np.random.RandomState(args.seed).randint(0, 1_000_000_000)
+        )
 
     if args.video_path:
         os.makedirs(args.video_path, exist_ok=True)
 
     for ep in range(args.episodes):
         reset_options: Dict[str, Any] = {"obj_set": args.obj_set}
-        episode_id = args.episode_id if args.episode_id is not None else shared_episode_id
+        episode_id = (
+            args.episode_id
+            if args.episode_id is not None
+            else shared_episode_id
+        )
         if episode_id is not None:
             reset_options["episode_id"] = episode_id
         obs, info = env.reset(seed=[args.seed + ep], options=reset_options)
         instruction_raw = env.unwrapped.get_language_instruction()
-        instruction = instruction_raw[0] if isinstance(instruction_raw, (list, tuple)) else instruction_raw
+        instruction = (
+            instruction_raw[0]
+            if isinstance(instruction_raw, (list, tuple))
+            else instruction_raw
+        )
         print(f"[Episode {ep}] Instruction: {instruction}")
 
         frames: List[np.ndarray] = []
@@ -184,19 +205,25 @@ def main(cfg: DictConfig) -> None:
 
         action_queue: List[np.ndarray] = []
         for step in range(args.max_steps):
-            payload = build_payload(obs, instruction, state_history=args.state_history)
+            payload = build_payload(
+                obs, instruction, state_history=args.state_history
+            )
             if len(action_queue) == 0:
                 start_inf = time.monotonic()
                 resp = client.infer(payload)
                 infer_time = time.monotonic() - start_inf
                 model_time = resp["server_timing"]["infer_s"]
-                print(f"inference time {infer_time:.3f}s, model time {model_time:.3f}s")
+                print(
+                    f"inference time {infer_time:.3f}s, model time {model_time:.3f}s"
+                )
 
                 actions = np.asarray(resp[PROCESSED_ACTION_KEY])
 
                 # actions = np.ones((args.action_chunk_size, env.action_space.shape[0]), dtype=np.float32) * 0.01
 
-                action_list = [np.asarray(a, dtype=np.float32).reshape(-1) for a in actions]
+                action_list = [
+                    np.asarray(a, dtype=np.float32).reshape(-1) for a in actions
+                ]
                 action_queue.extend(action_list[: args.action_chunk_size])
 
             action_step = action_queue.pop(0).reshape(1, -1)
@@ -218,7 +245,10 @@ def main(cfg: DictConfig) -> None:
                 break
 
         if args.video_path and frames:
-            video_file = os.path.join(args.video_path, f"episode_{ep}_task_{instruction}_success_{success}.mp4")
+            video_file = os.path.join(
+                args.video_path,
+                f"episode_{ep}_task_{instruction}_success_{success}.mp4",
+            )
             with imageio.get_writer(video_file, fps=5) as writer:
                 for frame in frames:
                     writer.append_data(frame)

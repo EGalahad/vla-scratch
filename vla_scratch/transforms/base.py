@@ -18,7 +18,11 @@ class TransformedDataset(torch.utils.data.Dataset):
     def collate_fn(batch: Sequence[Tuple[Any, TensorDict]]) -> Sequence[Any]:
         return tuple(torch.stack(items) for items in zip(*batch))
 
-    def __init__(self, dataset: torch.utils.data.Dataset, transforms: Sequence[TransformFn]):
+    def __init__(
+        self,
+        dataset: torch.utils.data.Dataset,
+        transforms: Sequence[TransformFn],
+    ):
         self.base_dataset = dataset
         self.transforms = list(transforms)
         self._log_names = [tr.__repr__() for tr in self.transforms]

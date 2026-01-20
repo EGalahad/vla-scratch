@@ -86,6 +86,7 @@ class TrainDataCfg(MutableMapping[str, TrainDatasetCfg]):
 
 
 from hydra.core.config_store import ConfigStore
+
 cs = ConfigStore.instance()
 cs.store(name="none", node=TrainDataCfg(), group="train_data")
 cs.store(name="none", node=EvalDataCfg(), group="eval_data")

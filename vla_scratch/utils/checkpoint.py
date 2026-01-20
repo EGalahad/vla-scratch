@@ -22,7 +22,7 @@ def _resolve_hf_checkpoint_path(path: str) -> Path:
     """
     from huggingface_hub import snapshot_download, get_token
 
-    raw = path[len(_HF_PREFIX):]
+    raw = path[len(_HF_PREFIX) :]
     if not raw:
         raise ValueError("Expected hf:org/repo[/subpath] in checkpoint_path.")
 
@@ -52,7 +52,9 @@ def _resolve_hf_checkpoint_path(path: str) -> Path:
     return local_path
 
 
-def find_latest_checkpoint(path: Path | str, desired_iter: Optional[int] = None) -> Optional[Path]:
+def find_latest_checkpoint(
+    path: Path | str, desired_iter: Optional[int] = None
+) -> Optional[Path]:
     """Resolve a checkpoint path to a concrete checkpoint location.
 
     Supports checkpoint directories (checkpoint_*/model.pt) and hf: paths.
@@ -88,13 +90,19 @@ def find_latest_checkpoint(path: Path | str, desired_iter: Optional[int] = None)
         except Exception:
             return -1
 
-    dir_candidates = [d for d in p.glob("checkpoint_*") if d.is_dir() and (d / "model.pt").exists()]
+    dir_candidates = [
+        d
+        for d in p.glob("checkpoint_*")
+        if d.is_dir() and (d / "model.pt").exists()
+    ]
     if dir_candidates:
+
         def _score(d: Path) -> int:
             ep = _epoch_num_from_name(d.name)
             if desired_iter is not None and ep == desired_iter:
                 return 10**9
             return ep
+
         dir_candidates.sort(key=_score)
         return dir_candidates[-1]
 
@@ -170,14 +178,20 @@ def load_checkpoint(
         mp = p / "model.pt"
         op = p / "optimizer.pt"
         if mp.exists():
-            model_sd = torch.load(mp, map_location="cpu", mmap=True, weights_only=False)
+            model_sd = torch.load(
+                mp, map_location="cpu", mmap=True, weights_only=False
+            )
         if optimizer is not None and op.exists():
-            optim_sd = torch.load(op, map_location="cpu", mmap=True, weights_only=False)
+            optim_sd = torch.load(
+                op, map_location="cpu", mmap=True, weights_only=False
+            )
     else:
         model_sd = {}
         optim_sd = {}
 
-    options = StateDictOptions(full_state_dict=True, broadcast_from_rank0=True, strict=False)
+    options = StateDictOptions(
+        full_state_dict=True, broadcast_from_rank0=True, strict=False
+    )
     missing, unexpected = set_model_state_dict(
         model=model,
         model_state_dict=model_sd,
@@ -194,7 +208,11 @@ def load_checkpoint(
             # Detect FQN-style groups
             uses_fqn = False
             if isinstance(groups, list) and groups:
-                first_params = groups[0].get("params", []) if isinstance(groups[0], dict) else []
+                first_params = (
+                    groups[0].get("params", [])
+                    if isinstance(groups[0], dict)
+                    else []
+                )
                 if first_params and isinstance(first_params[0], str):
                     uses_fqn = True
             if uses_fqn and isinstance(state, dict):
@@ -230,9 +248,13 @@ def save_checkpoint(
 
     def _cast_float_tensors_to_bfloat16(obj: Any) -> Any:
         if isinstance(obj, torch.Tensor):
-            return obj.to(dtype=torch.bfloat16) if obj.is_floating_point() else obj
+            return (
+                obj.to(dtype=torch.bfloat16) if obj.is_floating_point() else obj
+            )
         if isinstance(obj, dict):
-            return {k: _cast_float_tensors_to_bfloat16(v) for k, v in obj.items()}
+            return {
+                k: _cast_float_tensors_to_bfloat16(v) for k, v in obj.items()
+            }
         if isinstance(obj, list):
             return [_cast_float_tensors_to_bfloat16(v) for v in obj]
         if isinstance(obj, tuple):

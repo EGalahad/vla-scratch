@@ -7,12 +7,9 @@ Compute and save normalization statistics for any configured dataset/policy.
 Hydra usage mirrors train_policy: pass data=... and policy=... groups.
 
 Examples:
-  uv run python scripts/compute_norm_stats.py data=moz policy=pi \
+  uv run python scripts/compute_norm_stats.py data=libero-spatial policy=pi-qwen \
       data.action_horizon=30 data.state_history=1 \
       num_samples=4096 batch_size=64 num_workers=8
-
-  uv run python scripts/compute_norm_stats.py data=libero-ipec policy=pi \
-      policy.action_horizon=30 policy.state_history=10
 """
 
 from dataclasses import dataclass, field
@@ -35,7 +32,10 @@ from vla_scratch.datasets.config import DataConfig
 from vla_scratch.helpers.data import create_dataset
 from vla_scratch.policies.config import PolicyConfig
 
-from vla_scratch.transforms.data_keys import PROCESSED_ACTION_KEY, PROCESSED_STATE_KEY
+from vla_scratch.transforms.data_keys import (
+    PROCESSED_ACTION_KEY,
+    PROCESSED_STATE_KEY,
+)
 from vla_scratch.transforms.normalization import (
     save_norm_stats,
     NormStats,
@@ -47,10 +47,15 @@ from vla_scratch.utils.paths import REPO_ROOT
 if TYPE_CHECKING:
     from vla_scratch.transforms.data_types import DataSample
 
+
 @dataclass
 class NormStatsConfig:
     defaults: list[Any] = field(
-        default_factory=lambda: ["_self_", {"policy": "pi"}, {"data": "moz"}]
+        default_factory=lambda: [
+            "_self_",
+            {"policy": "pi-qwen"},
+            {"data": "libero-spatial"},
+        ]
     )
     data: DataConfig = MISSING
     policy: PolicyConfig = MISSING
@@ -75,11 +80,18 @@ def compute_and_save_norm_stats(
     pin_memory: bool,
     output_dir: Path,
 ) -> tuple["DataSample", NormStats, Path]:
-    dataset = create_dataset(data_config, policy_config, skip_norm_stats=True, skip_policy_transforms=True)
+    dataset = create_dataset(
+        data_config,
+        policy_config,
+        skip_norm_stats=True,
+        skip_policy_transforms=True,
+    )
     dataset_size = len(dataset)
 
     if data_config.norm_stats_path is None:
-        raise ValueError("DataConfig.norm_stats_path must be set to save stats.")
+        raise ValueError(
+            "DataConfig.norm_stats_path must be set to save stats."
+        )
 
     num_samples = min(num_samples, dataset_size)
     batch_size = min(batch_size, num_samples)
@@ -160,12 +172,14 @@ def main(cfg: DictConfig) -> None:
         data_cfg.norm_stats_path, data_cfg=data_cfg, policy_cfg=policy_cfg
     )
     if resolved_path is None:
-        raise ValueError("DataConfig.norm_stats_path must be set to save stats.")
+        raise ValueError(
+            "DataConfig.norm_stats_path must be set to save stats."
+        )
 
     if str(resolved_path).startswith("hf:"):
         from huggingface_hub import HfApi, get_token
 
-        raw = str(resolved_path)[len("hf:"):]
+        raw = str(resolved_path)[len("hf:") :]
         parts = raw.split("/", 2)
         if len(parts) >= 2:
             repo_id = "/".join(parts[:2])
@@ -182,7 +196,9 @@ def main(cfg: DictConfig) -> None:
         last_exc: Exception | None = None
         for repo_type in ("dataset", "model"):
             try:
-                api.create_repo(repo_id=repo_id, repo_type=repo_type, exist_ok=True)
+                api.create_repo(
+                    repo_id=repo_id, repo_type=repo_type, exist_ok=True
+                )
                 api.upload_folder(
                     repo_id=repo_id,
                     repo_type=repo_type,
@@ -202,7 +218,9 @@ def main(cfg: DictConfig) -> None:
         target_dir = REPO_ROOT / target_dir
     target_dir = target_dir.resolve()
     if target_dir.exists():
-        raise FileExistsError(f"Target norm stats path already exists: {target_dir}")
+        raise FileExistsError(
+            f"Target norm stats path already exists: {target_dir}"
+        )
     target_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(temp_dir), str(target_dir))
     print(f"Moved normalization stats to: {target_dir}")

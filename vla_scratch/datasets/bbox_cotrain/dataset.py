@@ -4,7 +4,10 @@ from typing import TYPE_CHECKING, Iterable, List, Set, Tuple, Union
 
 import torch
 import numpy as np
-from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.datasets.lerobot_dataset import (
+    LeRobotDataset,
+    LeRobotDatasetMetadata,
+)
 
 from vla_scratch.transforms.data_keys import (
     PROCESSED_ACTION_KEY,
@@ -75,7 +78,9 @@ def _parse_episode_str(value: Union[List[int], str, None]) -> List[int] | None:
         episodes: List[int] = []
         for entry in value:
             if isinstance(entry, (str, bytes)):
-                tokens = [tok.strip() for tok in str(entry).split(",") if tok.strip()]
+                tokens = [
+                    tok.strip() for tok in str(entry).split(",") if tok.strip()
+                ]
                 if not tokens:
                     continue
                 for token in tokens:
@@ -177,7 +182,9 @@ class CoTrainDataset(torch.utils.data.Dataset):
         self.state_history = config.state_history
         delta_timestamps = {
             "actions": (
-                np.linspace(0, self.action_horizon - 1, self.action_horizon, dtype=int)
+                np.linspace(
+                    0, self.action_horizon - 1, self.action_horizon, dtype=int
+                )
                 / fps
             ).tolist(),
         }
@@ -185,6 +192,7 @@ class CoTrainDataset(torch.utils.data.Dataset):
         # _prefetch_required_chunks(meta, episodes)
 
         import time
+
         time_start = time.time()
         self.dataset = LeRobotDataset(
             repo_id=repo_id,
@@ -194,7 +202,9 @@ class CoTrainDataset(torch.utils.data.Dataset):
             video_backend=config.video_backend,
         )
         time_end = time.time()
-        print(f"Initialized LeRobotDataset with {len(self.dataset)} samples in {time_end - time_start:.2f}s")
+        print(
+            f"Initialized LeRobotDataset with {len(self.dataset)} samples in {time_end - time_start:.2f}s"
+        )
         # Expose selection metadata for downstream inspection utilities.
         self.episodes = episodes
         self.metadata = meta
@@ -207,20 +217,30 @@ class CoTrainDataset(torch.utils.data.Dataset):
             print(f"Loading bounding boxes from {bbox_path}")
             time_start = time.time()
             episodes_set = set(episodes) if episodes is not None else None
-            self._bbox_index, self._bbox_keys = _build_bbox_index(bbox_path, episodes_set)
+            self._bbox_index, self._bbox_keys = _build_bbox_index(
+                bbox_path, episodes_set
+            )
             self._bbox_path = bbox_path
             time_end = time.time()
-            print(f"Loaded {len(self._bbox_index)} bounding box records in {time_end - time_start:.2f}s")
+            print(
+                f"Loaded {len(self._bbox_index)} bounding box records in {time_end - time_start:.2f}s"
+            )
         else:
             self._bbox_path = None
 
         self.bbox_only = config.bbox_only
         self.remove_bbox = config.remove_bbox
-        assert not (self.bbox_only and self.remove_bbox), "Cannot set both bbox_only and remove_bbox to True."
+        assert not (
+            self.bbox_only and self.remove_bbox
+        ), "Cannot set both bbox_only and remove_bbox to True."
         if config.bbox_only:
-            print("Filtering dataset to only include frames with bounding boxes.")
+            print(
+                "Filtering dataset to only include frames with bounding boxes."
+            )
             episode_list = _resolve_episodes(meta, episodes)
-            episode_lengths = [meta.episodes[ep_id]["length"] for ep_id in episode_list]
+            episode_lengths = [
+                meta.episodes[ep_id]["length"] for ep_id in episode_list
+            ]
             episode_start_indices = np.cumsum([0] + episode_lengths)[:-1]
             episode_to_start = dict(zip(episode_list, episode_start_indices))
             self.filtered_indices = [
@@ -253,7 +273,9 @@ class CoTrainDataset(torch.utils.data.Dataset):
         record = self._read_bbox_record(ep_idx, frame_idx)
         if record is not None and not self.remove_bbox:
             bbox = record.get("bbox")
-            bbox_coords = [[int(x * 1000) for x in d["bbox_normalized"]] for d in bbox]
+            bbox_coords = [
+                [int(x * 1000) for x in d["bbox_normalized"]] for d in bbox
+            ]
             labels = [d["label"] for d in bbox]
             bbox = [
                 {"bbox_2d": coords, "label": label}
@@ -267,8 +289,9 @@ class CoTrainDataset(torch.utils.data.Dataset):
         else:
             prompt = ""
             answer = ""
-        
+
         import torchvision.transforms.functional as F
+
         img = (img * 255).to(torch.uint8)
         img = F.resize(img, (480, 640))
 
@@ -276,7 +299,9 @@ class CoTrainDataset(torch.utils.data.Dataset):
             PROCESSED_IMAGE_KEY: img.unsqueeze(0),
             PROCESSED_IMAGE_MASK_KEY: torch.ones((1, 1), dtype=torch.bool),
             PROCESSED_ACTION_KEY: actions if not self.bbox_only else None,
-            PROCESSED_STATE_KEY: torch.randn((state_len, 1), dtype=torch.float32),
+            PROCESSED_STATE_KEY: torch.randn(
+                (state_len, 1), dtype=torch.float32
+            ),
             TASK_KEY: item.get("task"),
             GENERATION_PROMPT_KEY: prompt,
             GENERATION_ANSWER_KEY: answer,
@@ -302,17 +327,24 @@ def _prefetch_required_chunks(
     meta: LeRobotDatasetMetadata,
     download_videos: bool = True,
 ) -> None:
-    chunk_ids: List[int] = sorted({meta.get_episode_chunk(ep_idx) for ep_idx in meta.episodes.keys()})
+    chunk_ids: List[int] = sorted(
+        {meta.get_episode_chunk(ep_idx) for ep_idx in meta.episodes.keys()}
+    )
     if not chunk_ids:
         return
 
-    allow_patterns: List[str] = [f"data/chunk-{chunk_id:03d}/*" for chunk_id in chunk_ids]
+    allow_patterns: List[str] = [
+        f"data/chunk-{chunk_id:03d}/*" for chunk_id in chunk_ids
+    ]
     if download_videos and meta.video_keys:
         for chunk_id in chunk_ids:
             for video_key in meta.video_keys:
-                allow_patterns.append(f"videos/chunk-{chunk_id:03d}/{video_key}/*")
+                allow_patterns.append(
+                    f"videos/chunk-{chunk_id:03d}/{video_key}/*"
+                )
 
     from huggingface_hub import snapshot_download, get_token
+
     print(f"Prefetching with token: {get_token()}")
     snapshot_download(
         repo_id=meta.repo_id,

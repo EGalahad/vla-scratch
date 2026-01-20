@@ -78,4 +78,6 @@ cotrain_baseline_cfg = TrainDataCfg(
 )
 
 cs.store(name="bbox_cotrain_mix", node=cotrain_mix_cfg, group="train_data")
-cs.store(name="bbox_cotrain_baseline", node=cotrain_baseline_cfg, group="train_data")
+cs.store(
+    name="bbox_cotrain_baseline", node=cotrain_baseline_cfg, group="train_data"
+)

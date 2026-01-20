@@ -5,7 +5,11 @@ from omegaconf import DictConfig
 
 from vla_scratch.transforms.base import TransformedDataset
 from vla_scratch.transforms.common import ToDataSample
-from vla_scratch.transforms.normalization import DeNormalize, Normalize, load_norm_stats
+from vla_scratch.transforms.normalization import (
+    DeNormalize,
+    Normalize,
+    load_norm_stats,
+)
 from vla_scratch.utils.config import locate_class
 
 if TYPE_CHECKING:
@@ -35,7 +39,9 @@ def instantiate_transform(spec: Any) -> Any:
         obj = cls(**kwargs)
         if hasattr(obj, "compute") and callable(getattr(obj, "compute")):
             return obj
-        raise TypeError(f"Instance of '{target}' does not expose a 'compute' method.")
+        raise TypeError(
+            f"Instance of '{target}' does not expose a 'compute' method."
+        )
 
     raise TypeError(f"Unsupported transform specification: {spec!r}")
 
@@ -111,11 +117,12 @@ def create_dataset(
         ]
 
     policy_tfs = (
-        make_transforms(policy_cfg.transforms) if not skip_policy_transforms else []
+        make_transforms(policy_cfg.transforms)
+        if not skip_policy_transforms
+        else []
     )
 
     pipeline = dataset_tfs + norm_tf + [ToDataSample()] + policy_tfs
 
     base_dataset = data_cfg.instantiate()
     return TransformedDataset(base_dataset, pipeline)
-

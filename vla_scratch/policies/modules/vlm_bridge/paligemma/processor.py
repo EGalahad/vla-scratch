@@ -35,7 +35,9 @@ class PaligemmaProcessor(TransformFn):
         self.target_size = tuple(int(s) for s in target_size)
         processors = importlib.import_module("transformers")
         processor_cls = getattr(processors, processor_class)
-        self.processor: "PaliGemmaProcessor" = processor_cls.from_pretrained(model_id)
+        self.processor: "PaliGemmaProcessor" = processor_cls.from_pretrained(
+            model_id
+        )
         self.tokenizer = self.processor.tokenizer
 
         self.truncation = truncation
@@ -45,6 +47,7 @@ class PaligemmaProcessor(TransformFn):
         self.prompt_sep_ids = self.tokenizer.encode(
             self.prompt_sep_text, add_special_tokens=False
         )
+
     def compute(self, sample: "DataSample") -> "DataSample":
         images = sample.observation.images.type(torch.uint8)
         images_list = [[img for img in images]]
@@ -106,7 +109,9 @@ class PaligemmaProcessor(TransformFn):
             attention_mask = attention_mask.unsqueeze(0)
 
         bsz, seqlen = input_ids.shape
-        mask = torch.zeros((bsz, seqlen), dtype=torch.bool, device=input_ids.device)
+        mask = torch.zeros(
+            (bsz, seqlen), dtype=torch.bool, device=input_ids.device
+        )
         for b in range(bsz):
             sep_start = self._find_subsequence(
                 input_ids[b].tolist(), self.prompt_sep_ids
@@ -118,7 +123,9 @@ class PaligemmaProcessor(TransformFn):
         return mask
 
     @staticmethod
-    def _find_subsequence(sequence: list[int], subsequence: list[int]) -> Optional[int]:
+    def _find_subsequence(
+        sequence: list[int], subsequence: list[int]
+    ) -> Optional[int]:
         if not subsequence:
             return None
         max_start = len(sequence) - len(subsequence)

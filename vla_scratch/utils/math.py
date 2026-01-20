@@ -2,8 +2,11 @@ import numpy as np
 import torch
 from typing import Literal
 
+
 @torch.jit.script
-def scale_transform(x: torch.Tensor, lower: torch.Tensor, upper: torch.Tensor) -> torch.Tensor:
+def scale_transform(
+    x: torch.Tensor, lower: torch.Tensor, upper: torch.Tensor
+) -> torch.Tensor:
     """Normalizes a given input tensor to a range of [-1, 1].
 
     .. note::
@@ -24,7 +27,9 @@ def scale_transform(x: torch.Tensor, lower: torch.Tensor, upper: torch.Tensor) -
 
 
 @torch.jit.script
-def unscale_transform(x: torch.Tensor, lower: torch.Tensor, upper: torch.Tensor) -> torch.Tensor:
+def unscale_transform(
+    x: torch.Tensor, lower: torch.Tensor, upper: torch.Tensor
+) -> torch.Tensor:
     """De-normalizes a given input tensor from range of [-1, 1] to (lower, upper).
 
     .. note::
@@ -43,6 +48,7 @@ def unscale_transform(x: torch.Tensor, lower: torch.Tensor, upper: torch.Tensor)
     # return normalized tensor
     return x * (upper - lower) * 0.5 + offset
 
+
 @torch.jit.script
 def normalize(x: torch.Tensor, eps: float = 1e-9) -> torch.Tensor:
     """Normalizes a given input tensor to unit length.
@@ -55,6 +61,7 @@ def normalize(x: torch.Tensor, eps: float = 1e-9) -> torch.Tensor:
         Normalized tensor of shape (N, dims).
     """
     return x / x.norm(p=2, dim=-1).clamp(min=eps, max=None).unsqueeze(-1)
+
 
 @torch.jit.script
 def copysign(mag: float, other: torch.Tensor) -> torch.Tensor:
@@ -73,6 +80,7 @@ def copysign(mag: float, other: torch.Tensor) -> torch.Tensor:
     mag_torch = abs(mag) * torch.ones_like(other)
     return torch.copysign(mag_torch, other)
 
+
 @torch.jit.script
 def quat_unique(q: torch.Tensor) -> torch.Tensor:
     """Convert a unit quaternion to a standard form where the real part is non-negative.
@@ -87,6 +95,7 @@ def quat_unique(q: torch.Tensor) -> torch.Tensor:
         Standardized quaternions. Shape is (..., 4).
     """
     return torch.where(q[..., 0:1] < 0, -q, q)
+
 
 @torch.jit.script
 def matrix_from_quat(quaternions: torch.Tensor) -> torch.Tensor:
@@ -131,7 +140,9 @@ def rotation_matrix_to_6d(rotation: torch.Tensor) -> torch.Tensor:
         tensor of shape (..., 6)
     """
     if rotation.shape[-2:] != (3, 3):
-        raise ValueError(f"Rotation matrix must be (..., 3, 3); received {rotation.shape}")
+        raise ValueError(
+            f"Rotation matrix must be (..., 3, 3); received {rotation.shape}"
+        )
     return rotation[..., :2, :].reshape(*rotation.shape[:-2], 6)
 
 
@@ -157,7 +168,9 @@ def rotation_6d_to_matrix(d6: torch.Tensor) -> torch.Tensor:
     return R
 
 
-def convert_quat(quat: torch.Tensor | np.ndarray, to: Literal["xyzw", "wxyz"] = "xyzw") -> torch.Tensor | np.ndarray:
+def convert_quat(
+    quat: torch.Tensor | np.ndarray, to: Literal["xyzw", "wxyz"] = "xyzw"
+) -> torch.Tensor | np.ndarray:
     """Converts quaternion from one convention to another.
 
     The convention to convert TO is specified as an optional argument. If to == 'xyzw',
@@ -233,7 +246,9 @@ def quat_inv(q: torch.Tensor, eps: float = 1e-9) -> torch.Tensor:
 
 
 @torch.jit.script
-def quat_from_euler_xyz(roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tensor) -> torch.Tensor:
+def quat_from_euler_xyz(
+    roll: torch.Tensor, pitch: torch.Tensor, yaw: torch.Tensor
+) -> torch.Tensor:
     """Convert rotations given as Euler angles in radians to Quaternions.
 
     Note:
@@ -292,7 +307,9 @@ def quat_from_matrix(matrix: torch.Tensor) -> torch.Tensor:
         raise ValueError(f"Invalid rotation matrix shape {matrix.shape}.")
 
     batch_dim = matrix.shape[:-2]
-    m00, m01, m02, m10, m11, m12, m20, m21, m22 = torch.unbind(matrix.reshape(batch_dim + (9,)), dim=-1)
+    m00, m01, m02, m10, m11, m12, m20, m21, m22 = torch.unbind(
+        matrix.reshape(batch_dim + (9,)), dim=-1
+    )
 
     q_abs = _sqrt_positive_part(
         torch.stack(
@@ -310,13 +327,21 @@ def quat_from_matrix(matrix: torch.Tensor) -> torch.Tensor:
     quat_by_rijk = torch.stack(
         [
             # pyre-fixme[58]: `**` is not supported for operand types `Tensor` and `int`.
-            torch.stack([q_abs[..., 0] ** 2, m21 - m12, m02 - m20, m10 - m01], dim=-1),
+            torch.stack(
+                [q_abs[..., 0] ** 2, m21 - m12, m02 - m20, m10 - m01], dim=-1
+            ),
             # pyre-fixme[58]: `**` is not supported for operand types `Tensor` and `int`.
-            torch.stack([m21 - m12, q_abs[..., 1] ** 2, m10 + m01, m02 + m20], dim=-1),
+            torch.stack(
+                [m21 - m12, q_abs[..., 1] ** 2, m10 + m01, m02 + m20], dim=-1
+            ),
             # pyre-fixme[58]: `**` is not supported for operand types `Tensor` and `int`.
-            torch.stack([m02 - m20, m10 + m01, q_abs[..., 2] ** 2, m12 + m21], dim=-1),
+            torch.stack(
+                [m02 - m20, m10 + m01, q_abs[..., 2] ** 2, m12 + m21], dim=-1
+            ),
             # pyre-fixme[58]: `**` is not supported for operand types `Tensor` and `int`.
-            torch.stack([m10 - m01, m20 + m02, m21 + m12, q_abs[..., 3] ** 2], dim=-1),
+            torch.stack(
+                [m10 - m01, m20 + m02, m21 + m12, q_abs[..., 3] ** 2], dim=-1
+            ),
         ],
         dim=-2,
     )
@@ -328,12 +353,15 @@ def quat_from_matrix(matrix: torch.Tensor) -> torch.Tensor:
 
     # if not for numerical problems, quat_candidates[i] should be same (up to a sign),
     # forall i; we pick the best-conditioned one (with the largest denominator)
-    return quat_candidates[torch.nn.functional.one_hot(q_abs.argmax(dim=-1), num_classes=4) > 0.5, :].reshape(
-        batch_dim + (4,)
-    )
+    return quat_candidates[
+        torch.nn.functional.one_hot(q_abs.argmax(dim=-1), num_classes=4) > 0.5,
+        :,
+    ].reshape(batch_dim + (4,))
 
 
-def _axis_angle_rotation(axis: Literal["X", "Y", "Z"], angle: torch.Tensor) -> torch.Tensor:
+def _axis_angle_rotation(
+    axis: Literal["X", "Y", "Z"], angle: torch.Tensor
+) -> torch.Tensor:
     """Return the rotation matrices for one of the rotations about an axis of which Euler angles describe,
     for each value of the angle given.
 
@@ -364,7 +392,9 @@ def _axis_angle_rotation(axis: Literal["X", "Y", "Z"], angle: torch.Tensor) -> t
     return torch.stack(R_flat, -1).reshape(angle.shape + (3, 3))
 
 
-def matrix_from_euler(euler_angles: torch.Tensor, convention: str) -> torch.Tensor:
+def matrix_from_euler(
+    euler_angles: torch.Tensor, convention: str
+) -> torch.Tensor:
     """
     Convert rotations given as Euler angles (intrinsic) in radians to rotation matrices.
 
@@ -389,7 +419,10 @@ def matrix_from_euler(euler_angles: torch.Tensor, convention: str) -> torch.Tens
     for letter in convention:
         if letter not in ("X", "Y", "Z"):
             raise ValueError(f"Invalid letter {letter} in convention string.")
-    matrices = [_axis_angle_rotation(c, e) for c, e in zip(convention, torch.unbind(euler_angles, -1))]
+    matrices = [
+        _axis_angle_rotation(c, e)
+        for c, e in zip(convention, torch.unbind(euler_angles, -1))
+    ]
     # return functools.reduce(torch.matmul, matrices)
     return torch.matmul(torch.matmul(matrices[0], matrices[1]), matrices[2])
 
@@ -423,7 +456,11 @@ def euler_xyz_from_quat(
 
     # pitch (y-axis rotation)
     sin_pitch = 2.0 * (q_w * q_y - q_z * q_x)
-    pitch = torch.where(torch.abs(sin_pitch) >= 1, copysign(torch.pi / 2.0, sin_pitch), torch.asin(sin_pitch))
+    pitch = torch.where(
+        torch.abs(sin_pitch) >= 1,
+        copysign(torch.pi / 2.0, sin_pitch),
+        torch.asin(sin_pitch),
+    )
 
     # yaw (z-axis rotation)
     sin_yaw = 2.0 * (q_w * q_z + q_x * q_y)
@@ -431,12 +468,18 @@ def euler_xyz_from_quat(
     yaw = torch.atan2(sin_yaw, cos_yaw)
 
     if wrap_to_2pi:
-        return roll % (2 * torch.pi), pitch % (2 * torch.pi), yaw % (2 * torch.pi)
+        return (
+            roll % (2 * torch.pi),
+            pitch % (2 * torch.pi),
+            yaw % (2 * torch.pi),
+        )
     return roll, pitch, yaw
 
 
 @torch.jit.script
-def axis_angle_from_quat(quat: torch.Tensor, eps: float = 1.0e-6) -> torch.Tensor:
+def axis_angle_from_quat(
+    quat: torch.Tensor, eps: float = 1.0e-6
+) -> torch.Tensor:
     """Convert rotations given as quaternions to axis/angle.
 
     Args:
@@ -462,13 +505,17 @@ def axis_angle_from_quat(quat: torch.Tensor, eps: float = 1.0e-6) -> torch.Tenso
     angle = 2.0 * half_angle
     # check whether to apply Taylor approximation
     sin_half_angles_over_angles = torch.where(
-        angle.abs() > eps, torch.sin(half_angle) / angle, 0.5 - angle * angle / 48
+        angle.abs() > eps,
+        torch.sin(half_angle) / angle,
+        0.5 - angle * angle / 48,
     )
     return quat[..., 1:4] / sin_half_angles_over_angles.unsqueeze(-1)
 
 
 @torch.jit.script
-def quat_from_angle_axis(angle: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
+def quat_from_angle_axis(
+    angle: torch.Tensor, axis: torch.Tensor
+) -> torch.Tensor:
     """Convert rotations given as angle-axis to quaternions.
 
     Args:
@@ -566,7 +613,9 @@ def quat_box_minus(q1: torch.Tensor, q2: torch.Tensor) -> torch.Tensor:
 
 
 @torch.jit.script
-def quat_box_plus(q: torch.Tensor, delta: torch.Tensor, eps: float = 1.0e-6) -> torch.Tensor:
+def quat_box_plus(
+    q: torch.Tensor, delta: torch.Tensor, eps: float = 1.0e-6
+) -> torch.Tensor:
     """The box-plus operator (quaternion update) to apply an increment to a quaternion.
 
     Args:
@@ -580,8 +629,12 @@ def quat_box_plus(q: torch.Tensor, delta: torch.Tensor, eps: float = 1.0e-6) -> 
     Reference:
         https://github.com/ANYbotics/kindr/blob/master/doc/cheatsheet/cheatsheet_latest.pdf
     """
-    delta_norm = torch.clamp_min(torch.linalg.norm(delta, dim=-1, keepdim=True), min=eps)
-    delta_quat = quat_from_angle_axis(delta_norm.squeeze(-1), delta / delta_norm)  # exp(dq)
+    delta_norm = torch.clamp_min(
+        torch.linalg.norm(delta, dim=-1, keepdim=True), min=eps
+    )
+    delta_quat = quat_from_angle_axis(
+        delta_norm.squeeze(-1), delta / delta_norm
+    )  # exp(dq)
     new_quat = quat_mul(delta_quat, q)  # Apply perturbation
     return quat_unique(new_quat)
 

@@ -19,13 +19,19 @@ from vla_scratch.utils.checkpoint import (
     find_latest_checkpoint,
     load_model_from_checkpoint,
 )
-from vla_scratch.policies.modules.vlm_bridge.qwen.utils import restore_qwen3vl_forward
+from vla_scratch.policies.modules.vlm_bridge.qwen.utils import (
+    restore_qwen3vl_forward,
+)
 
 
 @dataclass
 class PredictBboxConfig:
     defaults: list[Any] = field(
-        default_factory=lambda: ["_self_", {"policy": "pi"}, {"data": "libero-ipec"}]
+        default_factory=lambda: [
+            "_self_",
+            {"policy": "pi"},
+            {"data": "libero-ipec"},
+        ]
     )
 
     # configs
@@ -34,7 +40,9 @@ class PredictBboxConfig:
     checkpoint_path: Optional[str] = None
 
     # visualization parameters
-    output_dir: str = "bbox_visualizations"  # Output directory for all visualizations
+    output_dir: str = (
+        "bbox_visualizations"  # Output directory for all visualizations
+    )
     max_episodes: Optional[int] = None
 
 
@@ -87,7 +95,9 @@ def main(cfg: DictConfig) -> None:
     if args.checkpoint_path is not None:
         ckpt = find_latest_checkpoint(args.checkpoint_path)
         if ckpt is None:
-            raise FileNotFoundError(f"No checkpoint found under {args.checkpoint_path}")
+            raise FileNotFoundError(
+                f"No checkpoint found under {args.checkpoint_path}"
+            )
         print(f"Loading checkpoint: {ckpt}")
         missing, unexpected = load_model_from_checkpoint(
             model, ckpt, device, strict=False
@@ -96,9 +106,13 @@ def main(cfg: DictConfig) -> None:
         if missing:
             print(f"Warning: Missing keys when loading checkpoint: {missing}")
         if unexpected:
-            print(f"Warning: Unexpected keys when loading checkpoint: {unexpected}")
+            print(
+                f"Warning: Unexpected keys when loading checkpoint: {unexpected}"
+            )
     else:
-        print("Warning: No checkpoint_path provided, using untrained model weights")
+        print(
+            "Warning: No checkpoint_path provided, using untrained model weights"
+        )
 
     model.eval()
     # Restore original forward methods before using model for generation
@@ -156,9 +170,7 @@ def main(cfg: DictConfig) -> None:
         start_idx = lerobot_dataset.meta.episodes["dataset_from_index"][
             episode_idx
         ]
-        end_idx = lerobot_dataset.meta.episodes["dataset_to_index"][
-            episode_idx
-        ]
+        end_idx = lerobot_dataset.meta.episodes["dataset_to_index"][episode_idx]
 
         for frame_idx in range(start_idx, end_idx + 1):
             frame_data = lerobot_dataset[frame_idx]
@@ -211,8 +223,9 @@ def main(cfg: DictConfig) -> None:
                 instruction=instruction,
             )
 
-
-    print(f"\nDone! Processed {num_episodes} episodes. Results saved to {output_dir}")
+    print(
+        f"\nDone! Processed {num_episodes} episodes. Results saved to {output_dir}"
+    )
 
 
 def convert_tensor_to_pil(img_tensor: torch.Tensor) -> Image.Image:
@@ -274,7 +287,9 @@ def prefill(
     model,
     processor,
     device: torch.device,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> Tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     """Prefill pass that returns cache, cache_position, attention_mask, and next token."""
     prompt_sep_text = "<<<PROMPT_SEP>>>"
     content: List[Dict] = [
@@ -306,10 +321,18 @@ def prefill(
 
     hidden_states = outputs.hidden_states
     past_key_values = outputs.past_key_values
-    cache_position = torch.tensor([model_inputs["input_ids"].shape[1]], device=device)
+    cache_position = torch.tensor(
+        [model_inputs["input_ids"].shape[1]], device=device
+    )
     attention_mask = model_inputs["attention_mask"]
     next_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
-    return hidden_states, past_key_values, cache_position, attention_mask, next_token
+    return (
+        hidden_states,
+        past_key_values,
+        cache_position,
+        attention_mask,
+        next_token,
+    )
 
 
 def decode(
@@ -352,7 +375,9 @@ def decode(
             past_key_values = decode_outputs.past_key_values
             cache_position = cache_position + 1
 
-            next_token = decode_outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
+            next_token = decode_outputs.logits[:, -1, :].argmax(
+                dim=-1, keepdim=True
+            )
             if next_token.item() == eos_token_id:
                 break
 
@@ -369,13 +394,15 @@ def generate_bbox(
     max_new_tokens: int = 256,
 ) -> str:
     """Generate bbox prediction using prefill and decode."""
-    hidden_states, kv_cache, cache_position, attention_mask, next_token = prefill(
-        image=image,
-        task=task,
-        prompt=prompt,
-        model=model,
-        processor=processor,
-        device=device,
+    hidden_states, kv_cache, cache_position, attention_mask, next_token = (
+        prefill(
+            image=image,
+            task=task,
+            prompt=prompt,
+            model=model,
+            processor=processor,
+            device=device,
+        )
     )
     decoded = decode(
         model=model,
@@ -531,7 +558,12 @@ def visualize_bbox(
             label_y = y2 + 5
 
         # Draw background rectangle for text
-        bg_coords = [x1, label_y, x1 + text_width + 10, label_y + text_height + 5]
+        bg_coords = [
+            x1,
+            label_y,
+            x1 + text_width + 10,
+            label_y + text_height + 5,
+        ]
         draw.rectangle(bg_coords, fill=color)
 
         # Draw text
@@ -559,7 +591,9 @@ def visualize_bbox(
                 current_width = word_width
             else:
                 current_line.append(word)
-                current_width += word_width + (10 if font else 5)  # Add space width
+                current_width += word_width + (
+                    10 if font else 5
+                )  # Add space width
 
         if current_line:
             lines.append(" ".join(current_line))
@@ -583,10 +617,12 @@ def visualize_bbox(
             ]
             bg_img = Image.new("RGBA", img_draw.size, (0, 0, 0, 0))
             bg_draw = ImageDraw.Draw(bg_img)
-            bg_draw.rectangle(bg_coords, fill=(0, 0, 0, 180))  # Semi-transparent black
-            img_draw = Image.alpha_composite(img_draw.convert("RGBA"), bg_img).convert(
-                "RGB"
-            )
+            bg_draw.rectangle(
+                bg_coords, fill=(0, 0, 0, 180)
+            )  # Semi-transparent black
+            img_draw = Image.alpha_composite(
+                img_draw.convert("RGBA"), bg_img
+            ).convert("RGB")
             draw = ImageDraw.Draw(img_draw)
 
             # Draw text

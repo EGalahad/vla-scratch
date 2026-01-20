@@ -17,8 +17,12 @@ import einops
 import jaxtyping as at
 
 from vla_scratch.policies.base import BasePolicy
-from vla_scratch.policies.modules.action_expert.cross_attention_dit import DiTModel
-from vla_scratch.policies.modules.vlm_bridge.paligemma.bridge import PaligemmaBridge
+from vla_scratch.policies.modules.action_expert.cross_attention_dit import (
+    DiTModel,
+)
+from vla_scratch.policies.modules.vlm_bridge.paligemma.bridge import (
+    PaligemmaBridge,
+)
 from vla_scratch.policies.modules.vlm_bridge.qwen.bridge import Qwen3VLBridge
 from vla_scratch.policies.modules.vlm_bridge.smolvlm.bridge import SmolVLMBridge
 
@@ -118,7 +122,9 @@ class PiPolicy(BasePolicy):
         start_time = time.time()
         self.action_expert = DiTModel(config=action_expert_config)
         end_time = time.time()
-        print(f"Action expert initialized in {end_time - start_time:.2f} seconds.")
+        print(
+            f"Action expert initialized in {end_time - start_time:.2f} seconds."
+        )
 
         action_expert_width = action_expert_config.hidden_size
         self.action_in_proj = nn.Linear(config.action_dim, action_expert_width)
@@ -142,13 +148,21 @@ class PiPolicy(BasePolicy):
         suffix_att_mask = torch.zeros(suffix_len, dtype=torch.bool)
         # create a new attention block for the suffix, prefix should not attend to suffix
         suffix_att_mask[0] = 1
-        self.register_buffer("suffix_pad_mask", suffix_pad_mask, persistent=False)
-        self.register_buffer("suffix_att_mask", suffix_att_mask, persistent=False)
+        self.register_buffer(
+            "suffix_pad_mask", suffix_pad_mask, persistent=False
+        )
+        self.register_buffer(
+            "suffix_att_mask", suffix_att_mask, persistent=False
+        )
 
         if config.suffix_add_pos_emb:
-            pos_emb_state = torch.zeros(config.state_history, action_expert_width)
+            pos_emb_state = torch.zeros(
+                config.state_history, action_expert_width
+            )
             self.position_embedding_state = nn.Parameter(pos_emb_state)
-            pos_emb_action = torch.zeros(config.action_horizon, action_expert_width)
+            pos_emb_action = torch.zeros(
+                config.action_horizon, action_expert_width
+            )
             self.position_embedding_action = nn.Parameter(pos_emb_action)
 
         param_device = next(self.parameters()).device
@@ -172,7 +186,9 @@ class PiPolicy(BasePolicy):
             )
         if self.use_obs_register:
             nn.init.normal_(
-                self.obs_registers, mean=0.0, std=self.config.obs_register_init_gain
+                self.obs_registers,
+                mean=0.0,
+                std=self.config.obs_register_init_gain,
             )
         self.action_expert.initialize_weights()
 
@@ -186,7 +202,9 @@ class PiPolicy(BasePolicy):
         )
         self.vlm_bridge.apply_fsdp(mp_policy, mesh)
 
-        fully_shard_layers(self.action_expert.blocks, mesh, mp_policy)
+        fully_shard_layers(
+            self.action_expert.blocks, mesh, mp_policy, num_to_prefetch=6
+        )
 
         mp_policy_root = MixedPrecisionPolicy(
             param_dtype=param_type,
@@ -200,6 +218,7 @@ class PiPolicy(BasePolicy):
         register_fsdp_forward_method(self, "encode_prefix")
         register_fsdp_forward_method(self, "predict_suffix")
         register_fsdp_forward_method(self, "sample_actions")
+        return self
 
     def encode_prefix(
         self, observation: "Observation"
@@ -211,8 +230,12 @@ class PiPolicy(BasePolicy):
         extra_att = None
         if self.use_obs_register:
             bsize = observation.shape[0]
-            extra_embs = einops.repeat(self.obs_registers, "s d -> b s d", b=bsize)
-            extra_pad = einops.repeat(self.obs_registers_pad_masks, "s -> b s", b=bsize)
+            extra_embs = einops.repeat(
+                self.obs_registers, "s d -> b s d", b=bsize
+            )
+            extra_pad = einops.repeat(
+                self.obs_registers_pad_masks, "s -> b s", b=bsize
+            )
             extra_att = self.obs_registers_att_masks
 
         # Bridge handles model-specific preprocessing + transformer forward
@@ -231,7 +254,9 @@ class PiPolicy(BasePolicy):
         # only retain last N layers for action expert
         prefix_pad_masks = vlm_outputs.prefix_pad_masks
         action_expert_layers = self.config.action_expert_cfg.num_hidden_layers
-        hidden_state_list = vlm_outputs.hidden_state_list[:, -action_expert_layers:]
+        hidden_state_list = vlm_outputs.hidden_state_list[
+            :, -action_expert_layers:
+        ]
         # only use the last num_obs_registers tokens from the prefix for the expert
         if self.config.expert_only_use_register:
             torch.cuda.nvtx.range_push("select_obs_registers")
@@ -258,23 +283,29 @@ class PiPolicy(BasePolicy):
         prefix_pad_masks = suffix_input.prefix_pad_masks
 
         torch.cuda.nvtx.range_push("embed_suffix")
-        suffix_embs, suffix_pad_masks, suffix_att_masks, time_emb = self._embed_suffix(
-            state, noisy_actions, time
+        suffix_embs, suffix_pad_masks, suffix_att_masks, time_emb = (
+            self._embed_suffix(state, noisy_actions, time)
         )
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push("attention_mask")
-        suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
+        suffix_att_2d_masks = make_att_2d_masks(
+            suffix_pad_masks, suffix_att_masks
+        )
         prefix_pad_mask = einops.repeat(
             prefix_pad_masks, "b p -> b s p", s=self.suffix_len
         )
-        full_att_2d_mask = torch.cat([prefix_pad_mask, suffix_att_2d_masks], dim=2)
+        full_att_2d_mask = torch.cat(
+            [prefix_pad_mask, suffix_att_2d_masks], dim=2
+        )
         full_att_mask = einops.rearrange(full_att_2d_mask, "b i j -> b 1 i j")
         torch.cuda.nvtx.range_pop()
 
         torch.cuda.nvtx.range_push("position_ids")
         prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
-        position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
+        position_ids = (
+            prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
+        )
         torch.cuda.nvtx.range_pop()
 
         encoder_hidden_states = suffix_input.hidden_state_list.unbind(dim=1)
@@ -307,13 +338,19 @@ class PiPolicy(BasePolicy):
                 torch.cuda.nvtx.range_pop()
 
             torch.cuda.nvtx.range_push("Expand Data Sample")
-            data_sample = repeat_batch(data_sample, self.config.num_noise_per_sample)
-            suffix_input = repeat_batch(suffix_input, self.config.num_noise_per_sample)
+            data_sample = repeat_batch(
+                data_sample, self.config.num_noise_per_sample
+            )
+            suffix_input = repeat_batch(
+                suffix_input, self.config.num_noise_per_sample
+            )
             torch.cuda.nvtx.range_pop()
 
             torch.cuda.nvtx.range_push("Apply Noise")
             actions = data_sample.action_chunk.actions
-            selected_noise = sample_noise(actions.shape, actions.device, actions.dtype)
+            selected_noise = sample_noise(
+                actions.shape, actions.device, actions.dtype
+            )
             u_t = selected_noise - actions
             timestep = sample_clamped_time(self.time_dist, data_sample.shape)
             noisy_actions = actions + timestep[:, None, None] * u_t
@@ -347,14 +384,20 @@ class PiPolicy(BasePolicy):
         self, observation: "Observation", num_steps=10
     ) -> at.Float[torch.Tensor, "*batch_size chunk_size action_dim"]:
         """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
+        torch.cuda.nvtx.range_push("VLM Encode Prefix")
         _, vlm_output, log_dict = self.encode_prefix(observation)
         suffix_input = self.construct_suffix_input(vlm_output)
+        torch.cuda.nvtx.range_pop()
 
         bsize = observation.shape[0]
         device = observation.device
         dtype = observation.state.dtype
 
-        actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
+        actions_shape = (
+            bsize,
+            self.config.action_horizon,
+            self.config.action_dim,
+        )
         noise = sample_noise(actions_shape, device, dtype)
 
         dt_float = 1.0 / num_steps
@@ -364,6 +407,7 @@ class PiPolicy(BasePolicy):
 
         x_t = noise
         while time_float >= dt_float / 2:
+            torch.cuda.nvtx.range_push("Predict Suffix in Sampling")
             _, v_t, _ = self.predict_suffix(
                 observation.state,
                 suffix_input=suffix_input,
@@ -374,12 +418,15 @@ class PiPolicy(BasePolicy):
             x_t = x_t - dt * v_t
             time -= dt
             time_float -= dt_float
+            torch.cuda.nvtx.range_pop()
         return x_t
 
     def _embed_suffix(
         self,
         state: at.Float[torch.Tensor, "*batch_size state_history state_dim"],
-        noisy_actions: at.Float[torch.Tensor, "*batch_size action_horizon action_dim"],
+        noisy_actions: at.Float[
+            torch.Tensor, "*batch_size action_horizon action_dim"
+        ],
         time: at.Float[torch.Tensor, "*batch_size"],
     ) -> Tuple[
         at.Float[torch.Tensor, "*batch_size action_horizon hidden_dim"],
@@ -409,14 +456,22 @@ class PiPolicy(BasePolicy):
         )
 
         if self.config.use_state:
-            state_emb = apply_checkpoint_when_training(self, self.state_in_proj, state)
+            state_emb = apply_checkpoint_when_training(
+                self, self.state_in_proj, state
+            )
             if self.config.suffix_add_pos_emb:
-                state_emb = state_emb + self.position_embedding_state[None, :, :]
-                action_emb = action_emb + self.position_embedding_action[None, :, :]
+                state_emb = (
+                    state_emb + self.position_embedding_state[None, :, :]
+                )
+                action_emb = (
+                    action_emb + self.position_embedding_action[None, :, :]
+                )
             suffix_emb = torch.cat([state_emb, action_emb], dim=1)
         else:
             if self.config.suffix_add_pos_emb:
-                action_emb = action_emb + self.position_embedding_action[None, :, :]
+                action_emb = (
+                    action_emb + self.position_embedding_action[None, :, :]
+                )
             suffix_emb = action_emb
 
         bsize = action_emb.shape[0]

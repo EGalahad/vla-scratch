@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 from hydra.core.config_store import ConfigStore
 from vla_scratch.policies.config import PolicyConfig
-from vla_scratch.policies.modules.action_expert.cross_attention_dit import DiTConfig
+from vla_scratch.policies.modules.action_expert.cross_attention_dit import (
+    DiTConfig,
+)
 
 
 @dataclass

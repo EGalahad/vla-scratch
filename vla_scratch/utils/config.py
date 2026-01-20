@@ -6,10 +6,7 @@ import re
 
 
 def locate_class(target: str) -> type:
-    """Import and return a class/function given a fully-qualified path string.
-
-    Example: "vla_scratch.datasets.spirit.transforms.SpiritImages"
-    """
+    """Import and return a class/function given a fully-qualified path string."""
     module_name, _, attr_name = target.rpartition(".")
     if not module_name:
         raise ValueError(f"Target '{target}' must be a fully-qualified path.")
@@ -17,7 +14,9 @@ def locate_class(target: str) -> type:
     try:
         return getattr(module, attr_name)
     except AttributeError as exc:
-        raise ImportError(f"Cannot import '{attr_name}' from '{module_name}'.") from exc
+        raise ImportError(
+            f"Cannot import '{attr_name}' from '{module_name}'."
+        ) from exc
 
 
 def resolve_config_placeholders(
@@ -48,4 +47,3 @@ def resolve_config_placeholders(
     s = re.sub(r"\{data\.([a-zA-Z0-9_]+)\}", _replace_data, s)
     s = re.sub(r"\{policy\.([a-zA-Z0-9_]+)\}", _replace_policy, s)
     return s
-

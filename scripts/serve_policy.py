@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
+from contextlib import nullcontext
 import logging
-import os
 import socket
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Sequence, Tuple, cast, TYPE_CHECKING
+from typing import Any, Dict, Optional, Sequence, cast, TYPE_CHECKING
+from setproctitle import setproctitle
 
-import numpy as np
 import art
+import emoji
 import torch
 
 import hydra
@@ -43,7 +44,11 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ServeConfig:
     defaults: list[Any] = field(
-        default_factory=lambda: ["_self_", {"policy": "pi-qwen"}, {"data": "libero-spatial"}]
+        default_factory=lambda: [
+            "_self_",
+            {"policy": "pi-qwen"},
+            {"data": "libero-spatial"},
+        ]
     )
 
     # server
@@ -56,13 +61,16 @@ class ServeConfig:
     policy: PolicyConfig = MISSING
     checkpoint_path: Optional[str] = None
     merge_policy_cfg: bool = False
+    use_bf16: bool = True  # Enable bf16 autocast for inference
 
 
 cs = ConfigStore.instance()
 cs.store(name="serve", node=ServeConfig())
 
 
-def _initialize_policy_dims(data_cfg: DataConfig, policy_cfg: PolicyConfig) -> None:
+def _initialize_policy_dims(
+    data_cfg: DataConfig, policy_cfg: PolicyConfig
+) -> None:
     data_cfg.action_horizon = policy_cfg.action_horizon
     data_cfg.state_history = policy_cfg.state_history
 
@@ -71,7 +79,9 @@ def _initialize_policy_dims(data_cfg: DataConfig, policy_cfg: PolicyConfig) -> N
         policy_cfg,
     )
     if len(dataset) == 0:
-        raise ValueError("Dataset is empty; unable to infer action/state dimensions.")
+        raise ValueError(
+            "Dataset is empty; unable to infer action/state dimensions."
+        )
 
     data_sample: "DataSample" = dataset[0][0]
     action_tensor = (
@@ -80,9 +90,13 @@ def _initialize_policy_dims(data_cfg: DataConfig, policy_cfg: PolicyConfig) -> N
         else None
     )
     if action_tensor is None:
-        raise ValueError("Dataset sample has no actions; unable to infer action_dim.")
+        raise ValueError(
+            "Dataset sample has no actions; unable to infer action_dim."
+        )
     if data_sample.observation.state is None:
-        raise ValueError("Dataset sample has no state; unable to infer state_dim.")
+        raise ValueError(
+            "Dataset sample has no state; unable to infer state_dim."
+        )
 
     action_dim = int(action_tensor.shape[-1])
     state_dim = int(data_sample.observation.state.shape[-1])
@@ -114,12 +128,14 @@ class ServePolicy:
         input_transforms: Sequence["TransformFn"],
         output_transforms: Sequence["TransformFn"],
         inference_steps: int = 10,
+        use_bf16: bool = True,
     ) -> None:
         self._model = model
         self._num_steps = inference_steps
         self._device = next(model.parameters()).device
         self._input_transforms = input_transforms
         self._output_transforms = output_transforms
+        self._use_bf16 = use_bf16 and self._device.type == "cuda"
 
     @torch.inference_mode()
     def infer(self, obs: Dict[str, Any]) -> Dict[str, Any]:
@@ -128,9 +144,18 @@ class ServePolicy:
             data_sample = transform.compute(data_sample)
         data_sample: "DataSample" = data_sample.to(self._device).unsqueeze(0)
 
-        actions = self._model.sample_actions(
-            data_sample.observation, num_steps=self._num_steps
+        autocast_ctx = (
+            torch.autocast(
+                device_type=self._device.type,
+                dtype=torch.bfloat16,
+            )
+            if self._use_bf16
+            else nullcontext()
         )
+        with autocast_ctx:
+            actions = self._model.sample_actions(
+                data_sample.observation, num_steps=self._num_steps
+            )
 
         output = {
             PROCESSED_ACTION_KEY: actions.squeeze(0).cpu(),
@@ -148,6 +173,7 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
     art.tprint("VLA-SCRATCH", font="big")
+    setproctitle("vla-serve")
     if (checkpoint_path := cfg.get("checkpoint_path")) is not None:
         cfg.checkpoint_path = find_latest_checkpoint(checkpoint_path)
     if cfg.get("merge_policy_cfg", False):
@@ -158,6 +184,7 @@ def main(cfg: DictConfig) -> None:
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Using device: %s", device)
+    use_bf16 = serve_cfg.use_bf16 and device.type == "cuda"
 
     # Create model from policy config
     for i, spec in enumerate(list(serve_cfg.data.input_transforms or [])):
@@ -166,28 +193,32 @@ def main(cfg: DictConfig) -> None:
             serve_cfg.data.input_transforms[i] = spec
 
     dataset = _initialize_policy_dims(serve_cfg.data, serve_cfg.policy)
-    print("Initializing model...")
     with torch.device(device):
         model = create_policy(serve_cfg.policy)
-    print("Model initialized.")
 
     # Load latest checkpoint
     if (ckpt := serve_cfg.checkpoint_path) is not None:
-        print(f"Loading checkpoint: {ckpt}")
+        print(emoji.emojize(":package: Loading checkpoint..."))
         missing, unexpected = load_model_from_checkpoint(
             model, ckpt, device, strict=False
         )
-        print("Checkpoint loaded.")
+        print(emoji.emojize(":package: Checkpoint loaded."))
         if missing:
             logger.warning("Missing keys when loading checkpoint: %s", missing)
         if unexpected:
-            logger.warning("Unexpected keys when loading checkpoint: %s", unexpected)
+            logger.warning(
+                "Unexpected keys when loading checkpoint: %s", unexpected
+            )
 
     model.eval()
+    if use_bf16:
+        model.bfloat16()
 
     # Build transforms
     input_transforms = build_input_transforms(serve_cfg.data, serve_cfg.policy)
-    output_transforms = build_output_transforms(serve_cfg.data, serve_cfg.policy)
+    output_transforms = build_output_transforms(
+        serve_cfg.data, serve_cfg.policy
+    )
     input_transforms = [ToTorch()] + input_transforms
     output_transforms = output_transforms + [ToNumpy()]
 
@@ -197,29 +228,26 @@ def main(cfg: DictConfig) -> None:
         input_transforms=input_transforms,
         output_transforms=output_transforms,
         inference_steps=serve_cfg.inference_steps,
+        use_bf16=use_bf16,
     )
-
-    metadata = {
-        "policy": serve_cfg.policy._target_.split(".")[-1],
-        "device": str(device),
-    }
 
     # Warmup once to trigger initialization
     warmup = True
     # warmup = False
     if warmup:
+        print(emoji.emojize(":fire: Warmup pass..."))
         observation_in = dataset.base_dataset[0]
         policy.infer(observation_in)
 
     policy.reset()
-    server = ZmqPolicyServer(
-        host=serve_cfg.host, port=serve_cfg.port, metadata=metadata
-    )
+    server = ZmqPolicyServer(host=serve_cfg.host, port=serve_cfg.port)
 
     hostname = socket.gethostname()
     local_ip = socket.gethostbyname(hostname)
     print(
-        f"Serving policy {metadata.get('policy')} on {serve_cfg.host}:{serve_cfg.port} (host={hostname} ip={local_ip})",
+        emoji.emojize(
+            f":rocket: Server listening at tcp://{serve_cfg.host}:{serve_cfg.port} "
+        )
     )
 
     try:

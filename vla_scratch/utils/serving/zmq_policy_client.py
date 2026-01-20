@@ -75,7 +75,9 @@ class ZmqPolicyClient:
         raise RuntimeError("Invalid response to reset")
 
 
-def _flatten_leaves(d: Dict[str, Any], prefix: List[str] | None = None) -> List[Tuple[List[str], Any]]:
+def _flatten_leaves(
+    d: Dict[str, Any], prefix: List[str] | None = None
+) -> List[Tuple[List[str], Any]]:
     if prefix is None:
         prefix = []
     leaves: List[Tuple[List[str], Any]] = []
@@ -112,18 +114,22 @@ def _encode_raw_message(msg: Dict[str, Any]) -> List[bytes]:
             else:
                 arr = np.ascontiguousarray(value, dtype=np.float32)
                 dtype_str = "float32"
-            items.append({
-                "path": path,
-                "kind": "ndarray",
-                "dtype": dtype_str,
-                "shape": list(arr.shape),
-            })
+            items.append(
+                {
+                    "path": path,
+                    "kind": "ndarray",
+                    "dtype": dtype_str,
+                    "shape": list(arr.shape),
+                }
+            )
             frames.append(arr.tobytes())
         elif isinstance(value, str):
-            items.append({
-                "path": path,
-                "kind": "str",
-            })
+            items.append(
+                {
+                    "path": path,
+                    "kind": "str",
+                }
+            )
             frames.append(value.encode("utf-8"))
         else:
             _assign_path(inline, path, value)

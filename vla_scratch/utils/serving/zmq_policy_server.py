@@ -23,11 +23,9 @@ class ZmqPolicyServer:
         *,
         host: str = "0.0.0.0",
         port: int | None = None,
-        metadata: dict | None = None,
     ) -> None:
         self._host = host
         self._port = port or 0
-        self._metadata = metadata or {}
 
         self._context = zmq.Context.instance()
         self._socket: zmq.Socket = self._context.socket(zmq.REP)
@@ -50,7 +48,9 @@ class ZmqPolicyServer:
             host = "*"
         return f"tcp://{host}:{self._port}"
 
-    def wait_for_request(self, timeout: float | None = None) -> Optional[Dict[str, Any]]:
+    def wait_for_request(
+        self, timeout: float | None = None
+    ) -> Optional[Dict[str, Any]]:
         """Block until a request is available, or timeout."""
         with self._cv:
             if self._stopped:
@@ -64,7 +64,11 @@ class ZmqPolicyServer:
                         break
             if self._stopped:
                 return None
-            return dict(self._pending_request) if self._pending_request is not None else None
+            return (
+                dict(self._pending_request)
+                if self._pending_request is not None
+                else None
+            )
 
     def send_response(self, payload: Dict[str, Any]) -> None:
         """Provide a response for the currently pending request.
@@ -74,7 +78,9 @@ class ZmqPolicyServer:
         """
         with self._cv:
             if self._pending_request is None:
-                logger.warning("No pending request to respond to; dropping response.")
+                logger.warning(
+                    "No pending request to respond to; dropping response."
+                )
                 return
             self._pending_response = dict(payload)
             self._cv.notify_all()
@@ -99,7 +105,9 @@ class ZmqPolicyServer:
                 msg = _decode_request(frames)
 
                 with self._cv:
-                    while self._pending_request is not None and not self._stopped:
+                    while (
+                        self._pending_request is not None and not self._stopped
+                    ):
                         self._cv.wait()
                     if self._stopped:
                         break
@@ -169,7 +177,9 @@ def _decode_request(frames: List[bytes]) -> Dict[str, Any]:
     return obj
 
 
-def _flatten_leaves(d: Dict[str, Any], prefix: List[str] | None = None) -> List[Tuple[List[str], Any]]:
+def _flatten_leaves(
+    d: Dict[str, Any], prefix: List[str] | None = None
+) -> List[Tuple[List[str], Any]]:
     if prefix is None:
         prefix = []
     leaves: List[Tuple[List[str], Any]] = []

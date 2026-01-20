@@ -13,7 +13,9 @@ class DontBlindConfig(DataConfig):
     Config for the BlindVLA LeRobot dataset.
     """
 
-    _target_: str = "vla_scratch.datasets.dont_blind.lerobot_dataset.DontBlindDataset"
+    _target_: str = (
+        "vla_scratch.datasets.dont_blind.lerobot_dataset.DontBlindDataset"
+    )
     repo_id: str = "elijahgalahad/blindvla_1k_lerobot"
     root_path: Optional[Path] = None
 
@@ -56,19 +58,24 @@ dont_blind_8_8_objects_config_test = DontBlindConfig(
 )
 
 from vla_scratch.utils.paths import REPO_ROOT
+
 ours = DontBlindConfig(
     repo_id="ours",
     root_path=REPO_ROOT,
     splits=[".*"],
-    norm_stats_path="normalization_stats/ours/lerobot_norm_stats-horizon_{data.action_horizon}-history_{data.state_history}.npz"
+    norm_stats_path="normalization_stats/ours/lerobot_norm_stats-horizon_{data.action_horizon}-history_{data.state_history}.npz",
 )
 
 cs = ConfigStore.instance()
 cs.store(name="dont_blind", node=default_dont_blind_config, group="data")
 cs.store(
-    name="dont_blind_8_8_train", node=dont_blind_8_8_objects_config_train, group="data"
+    name="dont_blind_8_8_train",
+    node=dont_blind_8_8_objects_config_train,
+    group="data",
 )
 cs.store(
-    name="dont_blind_8_8_test", node=dont_blind_8_8_objects_config_test, group="data"
+    name="dont_blind_8_8_test",
+    node=dont_blind_8_8_objects_config_test,
+    group="data",
 )
 cs.store(name="ours", node=ours, group="data")

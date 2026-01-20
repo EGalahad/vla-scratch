@@ -40,7 +40,9 @@ dont_blind_8_8_eval_cfg = EvalDataCfg(
         ),
     }
 )
-cs.store(name="dont_blind_8_8_eval", node=dont_blind_8_8_eval_cfg, group="eval_data")
+cs.store(
+    name="dont_blind_8_8_eval", node=dont_blind_8_8_eval_cfg, group="eval_data"
+)
 
 dont_blind_8_8_train_mix_cfg = TrainDataCfg(
     datasets={

@@ -49,7 +49,9 @@ def _qwen3vl_rot_pos_emb(
         m_2=merge_size,
     )
 
-    coords = torch.stack((row_idx_block.reshape(-1), col_idx_block.reshape(-1)), dim=-1)
+    coords = torch.stack(
+        (row_idx_block.reshape(-1), col_idx_block.reshape(-1)), dim=-1
+    )
     if t > 1:
         coords = coords.repeat(t, 1)
     pos_ids = einops.repeat(coords, "p d -> (b p) d", b=len(grid_thw_list))
@@ -87,7 +89,9 @@ def _qwen3vl_fast_pos_embed_interpolate(
         dw = w_idxs - w_floor
 
         dh_grid, dw_grid = torch.meshgrid(dh, dw, indexing="ij")
-        h_floor_grid, w_floor_grid = torch.meshgrid(h_floor, w_floor, indexing="ij")
+        h_floor_grid, w_floor_grid = torch.meshgrid(
+            h_floor, w_floor, indexing="ij"
+        )
         h_ceil_grid, w_ceil_grid = torch.meshgrid(h_ceil, w_ceil, indexing="ij")
 
         w11 = dh_grid * dw_grid
@@ -95,8 +99,12 @@ def _qwen3vl_fast_pos_embed_interpolate(
         w01 = dw_grid - w11
         w00 = 1 - dh_grid - w01
 
-        h_grid = torch.stack([h_floor_grid, h_floor_grid, h_ceil_grid, h_ceil_grid])
-        w_grid = torch.stack([w_floor_grid, w_ceil_grid, w_floor_grid, w_ceil_grid])
+        h_grid = torch.stack(
+            [h_floor_grid, h_floor_grid, h_ceil_grid, h_ceil_grid]
+        )
+        w_grid = torch.stack(
+            [w_floor_grid, w_ceil_grid, w_floor_grid, w_ceil_grid]
+        )
         h_grid_idx = h_grid * num_grid_per_side
 
         indices = (h_grid_idx + w_grid).reshape(4, -1)
@@ -111,7 +119,9 @@ def _qwen3vl_fast_pos_embed_interpolate(
 
     indices, weights = compute_indices_weights(h, w)
     indices = einops.repeat(indices, "four p -> four b p", b=len(grid_thw_list))
-    weights = einops.repeat(weights, "four p 1 -> four b p 1", b=len(grid_thw_list))
+    weights = einops.repeat(
+        weights, "four p 1 -> four b p 1", b=len(grid_thw_list)
+    )
 
     embeds = self.pos_embed(indices) * weights
     combined = embeds.sum(dim=0)
@@ -161,11 +171,19 @@ def _qwen3_vision_attn_fast_forward(
 
     torch.cuda.nvtx.range_push("attn")
     batch_size = (
-        grid_thw.shape[0] if isinstance(grid_thw, torch.Tensor) else len(grid_thw)
+        grid_thw.shape[0]
+        if isinstance(grid_thw, torch.Tensor)
+        else len(grid_thw)
     )
-    query_states = einops.rearrange(query_states, "(b l) h d -> b h l d", b=batch_size)
-    key_states = einops.rearrange(key_states, "(b l) h d -> b h l d", b=batch_size)
-    value_states = einops.rearrange(value_states, "(b l) h d -> b h l d", b=batch_size)
+    query_states = einops.rearrange(
+        query_states, "(b l) h d -> b h l d", b=batch_size
+    )
+    key_states = einops.rearrange(
+        key_states, "(b l) h d -> b h l d", b=batch_size
+    )
+    value_states = einops.rearrange(
+        value_states, "(b l) h d -> b h l d", b=batch_size
+    )
     attn_out = F.scaled_dot_product_attention(
         query_states,
         key_states,
@@ -256,10 +274,14 @@ def _qwen3_vision_model_fast_forward(
 
 @torch.no_grad()
 @dynamic_rope_update
-def _qwen_text_rotary_forward_fp32(self: "Qwen3VLTextRotaryEmbedding", x, position_ids):
+def _qwen_text_rotary_forward_fp32(
+    self: "Qwen3VLTextRotaryEmbedding", x, position_ids
+):
     """Compute text rotary embeddings in fp32 then cast to input dtype."""
     if position_ids.ndim == 2:
-        position_ids = position_ids[None, ...].expand(3, position_ids.shape[0], -1)
+        position_ids = position_ids[None, ...].expand(
+            3, position_ids.shape[0], -1
+        )
     inv_freq_expanded = (
         self.inv_freq[None, None, :, None]
         .to(dtype=torch.float32)
@@ -349,7 +371,9 @@ REPLACED = False
 def replace_qwen3vl_forward():
     global REPLACED
     if not REPLACED:
-        Qwen3VLTextDecoderLayer.forward = _qwen_text_decoder_layer_custom_forward
+        Qwen3VLTextDecoderLayer.forward = (
+            _qwen_text_decoder_layer_custom_forward
+        )
         Qwen3VLVisionModel.forward = _qwen3_vision_model_fast_forward
         Qwen3VLVisionAttention.forward = _qwen3_vision_attn_fast_forward
         Qwen3VLTextRotaryEmbedding.forward = _qwen_text_rotary_forward_fp32

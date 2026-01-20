@@ -10,7 +10,11 @@ from vla_scratch.transforms.data_keys import (
     PROCESSED_STATE_KEY,
     TASK_KEY,
 )
-from vla_scratch.transforms.data_types import ActionChunk, Observation, DataSample
+from vla_scratch.transforms.data_types import (
+    ActionChunk,
+    Observation,
+    DataSample,
+)
 from vla_scratch.transforms.base import TransformFn
 
 
@@ -31,11 +35,14 @@ class ToDataSample(TransformFn):
         return DataSample(observation=observation, action_chunk=action)
 
 
-
 class ToTorch(TransformFn):
     def compute(self, sample: Dict[str, Any]) -> Dict[str, torch.Tensor]:
         return {
-            key: torch.from_numpy(val).to(torch.float32) if isinstance(val, np.ndarray) else val
+            key: (
+                torch.from_numpy(val).to(torch.float32)
+                if isinstance(val, np.ndarray)
+                else val
+            )
             for key, val in sample.items()
         }
 

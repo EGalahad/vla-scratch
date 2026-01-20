@@ -17,13 +17,13 @@ from vla_scratch.transforms.data_keys import (
 )
 
 if TYPE_CHECKING:
-    from vla_scratch.datasets.libero.config import LiberoConfig
+    from vla_scratch.datasets.droid.config import DROIDConfig
 
 
-class LIBERODataset(torch.utils.data.Dataset):
+class DROIDDataset(torch.utils.data.Dataset):
     def __init__(
         self,
-        config: "LiberoConfig",
+        config: "DROIDConfig",
     ):
         self.action_horizon = action_horizon = config.action_horizon
         self.state_history = state_history = config.state_history
@@ -34,8 +34,8 @@ class LIBERODataset(torch.utils.data.Dataset):
         self.cmd_keys: list[str] = [
             key for key in meta_data.features.keys() if "cmd" in key
         ]
-        self.cmd_keys.append("actions")
-        self.cmd_keys.append("actions_orig")
+        # DROID uses "action" (singular), not "actions" (plural)
+        self.cmd_keys.append("action")
         self.state_keys: list[str] = [
             key for key in meta_data.features.keys() if "state" in key
         ]
@@ -64,28 +64,33 @@ class LIBERODataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         item = self.dataset[idx]
+        
+        # DROID uses different image keys than LIBERO
+        # DROID: observation.images.wrist_image_left, observation.images.exterior_image_1_left, observation.images.exterior_image_2_left
         img = torch.stack(
-            [item["images.cam_front"], item["images.cam_wrist"]], dim=0
+            [
+                item["observation.images.wrist_image_left"],
+                item["observation.images.exterior_image_1_left"], 
+                item["observation.images.exterior_image_2_left"]
+            ], 
+            dim=0
         )
         img = (img * 255).to(torch.uint8)
         img_mask = torch.ones((img.shape[0], 1), dtype=torch.bool)
 
-        state = torch.cat(
-            [
-                item["arm_state_cart_pos"],
-                item["arm_state_cart_rot"],
-                item["gripper_state_qpos"],
-            ],
-            dim=-1,
-        )
-        state = state[1:]
-        actions = item["actions_orig"]
+        # DROID uses "observation.state" directly (already concatenated)
+        state = item["observation.state"]
+        if len(state.shape) > 1:
+            state = state[1:]  # Remove first timestep if needed
+        
+        # DROID uses "action" (singular)
+        actions = item["action"]
 
         processed = {
             PROCESSED_IMAGE_KEY: img,
             PROCESSED_IMAGE_MASK_KEY: img_mask,
             PROCESSED_STATE_KEY: state,
             PROCESSED_ACTION_KEY: actions,
-            TASK_KEY: item.get("task"),
+            TASK_KEY: item.get("language_instruction", ""),  # DROID uses language_instruction
         }
         return processed

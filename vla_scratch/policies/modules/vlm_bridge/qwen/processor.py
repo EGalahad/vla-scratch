@@ -36,7 +36,9 @@ class QwenProcessor(TransformFn):
     ) -> None:
         processors = importlib.import_module("transformers")
         processor_cls = getattr(processors, processor_class)
-        self.processor: "Qwen3VLProcessor" = processor_cls.from_pretrained(model_id)
+        self.processor: "Qwen3VLProcessor" = processor_cls.from_pretrained(
+            model_id
+        )
         self.max_length = max_length
         self.padding = padding
 
@@ -47,7 +49,9 @@ class QwenProcessor(TransformFn):
             "assistant\n", add_special_tokens=False
         )
         self.prompt_sep_text = "<<<PROMPT_SEP>>>"
-        self.prompt_sep_ids = tokenizer.encode(self.prompt_sep_text, add_special_tokens=False)
+        self.prompt_sep_ids = tokenizer.encode(
+            self.prompt_sep_text, add_special_tokens=False
+        )
 
     def compute(self, sample: "DataSample") -> "DataSample":
         user_content: List[Dict] = [
@@ -59,7 +63,9 @@ class QwenProcessor(TransformFn):
             {"type": "text", "text": sample.observation.generation_prompt}
         )
 
-        gpt_content = [{"type": "text", "text": sample.observation.generation_answer}]
+        gpt_content = [
+            {"type": "text", "text": sample.observation.generation_answer}
+        ]
         messages = [
             {"role": "user", "content": user_content},
             {"role": "assistant", "content": gpt_content},
@@ -128,7 +134,9 @@ class QwenProcessor(TransformFn):
         attention_mask = encoded["attention_mask"]
 
         bsz, seqlen = input_ids.shape
-        mask = torch.zeros((bsz, seqlen), dtype=torch.bool, device=input_ids.device)
+        mask = torch.zeros(
+            (bsz, seqlen), dtype=torch.bool, device=input_ids.device
+        )
         for b in range(bsz):
             sep_start = self._find_subsequence(
                 input_ids[b].tolist(), self.prompt_sep_ids
@@ -141,7 +149,9 @@ class QwenProcessor(TransformFn):
         return mask
 
     @staticmethod
-    def _find_subsequence(sequence: list[int], subsequence: list[int]) -> Optional[int]:
+    def _find_subsequence(
+        sequence: list[int], subsequence: list[int]
+    ) -> Optional[int]:
         if not subsequence:
             return None
         max_start = len(sequence) - len(subsequence)
@@ -152,7 +162,10 @@ class QwenProcessor(TransformFn):
 
     @staticmethod
     def assistant_content_mask(
-        encoded: dict, im_start_id: int, assistant_header_ids: list[int], im_end_id: int
+        encoded: dict,
+        im_start_id: int,
+        assistant_header_ids: list[int],
+        im_end_id: int,
     ) -> torch.BoolTensor:
         """
         Returns a boolean mask (B, T) that is True on assistant *content* tokens and False elsewhere.
@@ -172,7 +185,9 @@ class QwenProcessor(TransformFn):
             input_ids = input_ids.unsqueeze(0)
 
         bsz, seqlen = input_ids.shape
-        mask = torch.zeros((bsz, seqlen), dtype=torch.bool, device=input_ids.device)
+        mask = torch.zeros(
+            (bsz, seqlen), dtype=torch.bool, device=input_ids.device
+        )
 
         for b in range(bsz):
             i = 0
@@ -232,7 +247,9 @@ class QwenProcessor(TransformFn):
         video_token_id = self.processor.video_token_id
         vision_start_token_id = self.processor.vision_start_token_id
         mrope_position_deltas = []
-        if input_ids is not None and (image_grid_thw is not None or video_grid_thw is not None):
+        if input_ids is not None and (
+            image_grid_thw is not None or video_grid_thw is not None
+        ):
             total_input_ids = input_ids
             if attention_mask is None:
                 attention_mask = torch.ones_like(total_input_ids)
@@ -249,7 +266,9 @@ class QwenProcessor(TransformFn):
             for i, input_ids in enumerate(total_input_ids):
                 input_ids = input_ids[attention_mask[i] == 1]
                 image_nums, video_nums = 0, 0
-                vision_start_indices = torch.argwhere(input_ids == vision_start_token_id).squeeze(1)
+                vision_start_indices = torch.argwhere(
+                    input_ids == vision_start_token_id
+                ).squeeze(1)
                 vision_tokens = input_ids[vision_start_indices + 1]
                 image_nums = (vision_tokens == image_token_id).sum()
                 video_nums = (vision_tokens == video_token_id).sum()
@@ -291,29 +310,62 @@ class QwenProcessor(TransformFn):
                     )
                     text_len = ed - st
 
-                    st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+                    st_idx = (
+                        llm_pos_ids_list[-1].max() + 1
+                        if len(llm_pos_ids_list) > 0
+                        else 0
+                    )
                     llm_pos_ids_list.append(
-                        torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx
+                        torch.arange(text_len).view(1, -1).expand(3, -1)
+                        + st_idx
                     )
 
-                    t_index = torch.arange(llm_grid_t).view(-1, 1).expand(-1, llm_grid_h * llm_grid_w).flatten()
-                    h_index = torch.arange(llm_grid_h).view(1, -1, 1).expand(llm_grid_t, -1, llm_grid_w).flatten()
-                    w_index = torch.arange(llm_grid_w).view(1, 1, -1).expand(llm_grid_t, llm_grid_h, -1).flatten()
+                    t_index = (
+                        torch.arange(llm_grid_t)
+                        .view(-1, 1)
+                        .expand(-1, llm_grid_h * llm_grid_w)
+                        .flatten()
+                    )
+                    h_index = (
+                        torch.arange(llm_grid_h)
+                        .view(1, -1, 1)
+                        .expand(llm_grid_t, -1, llm_grid_w)
+                        .flatten()
+                    )
+                    w_index = (
+                        torch.arange(llm_grid_w)
+                        .view(1, 1, -1)
+                        .expand(llm_grid_t, llm_grid_h, -1)
+                        .flatten()
+                    )
                     llm_pos_ids_list.append(
-                        torch.stack([t_index, h_index, w_index]) + text_len + st_idx
+                        torch.stack([t_index, h_index, w_index])
+                        + text_len
+                        + st_idx
                     )
                     st = ed + llm_grid_t * llm_grid_h * llm_grid_w
 
                 if st < len(input_tokens):
-                    st_idx = llm_pos_ids_list[-1].max() + 1 if len(llm_pos_ids_list) > 0 else 0
+                    st_idx = (
+                        llm_pos_ids_list[-1].max() + 1
+                        if len(llm_pos_ids_list) > 0
+                        else 0
+                    )
                     text_len = len(input_tokens) - st
                     llm_pos_ids_list.append(
-                        torch.arange(text_len).view(1, -1).expand(3, -1) + st_idx
+                        torch.arange(text_len).view(1, -1).expand(3, -1)
+                        + st_idx
                     )
 
-                llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(3, -1)
-                position_ids[..., i, attention_mask[i] == 1] = llm_positions.to(position_ids.device)
-                mrope_position_deltas.append(llm_positions.max() + 1 - len(total_input_ids[i]))
+                llm_positions = torch.cat(llm_pos_ids_list, dim=1).reshape(
+                    3, -1
+                )
+                position_ids[..., i, attention_mask[i] == 1] = llm_positions.to(
+                    position_ids.device
+                )
+                mrope_position_deltas.append(
+                    llm_positions.max() + 1 - len(total_input_ids[i])
+                )
             mrope_position_deltas = torch.tensor(
                 mrope_position_deltas, device=input_ids.device
             ).unsqueeze(1)
@@ -323,10 +375,16 @@ class QwenProcessor(TransformFn):
                 position_ids = attention_mask.long().cumsum(-1) - 1
                 position_ids.masked_fill_(attention_mask == 0, 1)
                 position_ids = (
-                    position_ids.unsqueeze(0).expand(3, -1, -1).to(attention_mask.device)
+                    position_ids.unsqueeze(0)
+                    .expand(3, -1, -1)
+                    .to(attention_mask.device)
                 )
-                max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]
-                mrope_position_deltas = max_position_ids + 1 - attention_mask.shape[-1]
+                max_position_ids = position_ids.max(0, keepdim=False)[0].max(
+                    -1, keepdim=True
+                )[0]
+                mrope_position_deltas = (
+                    max_position_ids + 1 - attention_mask.shape[-1]
+                )
             else:
                 position_ids = (
                     torch.arange(input_ids.shape[1], device=input_ids.device)

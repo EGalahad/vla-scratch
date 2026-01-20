@@ -4,7 +4,10 @@ from typing import TYPE_CHECKING, Iterable, List, Set, Tuple, Union
 
 import torch
 import numpy as np
-from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.datasets.lerobot_dataset import (
+    LeRobotDataset,
+    LeRobotDatasetMetadata,
+)
 
 from vla_scratch.transforms.data_keys import (
     PROCESSED_ACTION_KEY,
@@ -75,7 +78,9 @@ def _parse_episode_str(value: Union[List[int], str, None]) -> List[int] | None:
         episodes: List[int] = []
         for entry in value:
             if isinstance(entry, (str, bytes)):
-                tokens = [tok.strip() for tok in str(entry).split(",") if tok.strip()]
+                tokens = [
+                    tok.strip() for tok in str(entry).split(",") if tok.strip()
+                ]
                 if not tokens:
                     continue
                 for token in tokens:
@@ -137,7 +142,9 @@ class DontBlindDataset(torch.utils.data.Dataset):
         self.state_history = config.state_history
         delta_timestamps = {
             "actions": (
-                np.linspace(0, self.action_horizon - 1, self.action_horizon, dtype=int)
+                np.linspace(
+                    0, self.action_horizon - 1, self.action_horizon, dtype=int
+                )
                 / fps
             ).tolist(),
         }
@@ -160,7 +167,9 @@ class DontBlindDataset(torch.utils.data.Dataset):
         if bbox_path.exists():
             print(f"Loading bounding boxes from {bbox_path}")
             records = _load_jsonl(bbox_path)
-            records.sort(key=lambda r: (int(r["episode_index"]), int(r["frame_index"])))
+            records.sort(
+                key=lambda r: (int(r["episode_index"]), int(r["frame_index"]))
+            )
             self._bbox_records = [
                 r for r in records if (int(r["episode_index"]) in episodes)
             ]
@@ -169,11 +178,16 @@ class DontBlindDataset(torch.utils.data.Dataset):
                 self._bbox_idx_map.setdefault(key, bbox_idx)
 
         if config.bbox_only:
-            print("Filtering dataset to only include frames with bounding boxes.")
-            episode_lengths = [meta.episodes[ep_id]["length"] for ep_id in episodes]
+            print(
+                "Filtering dataset to only include frames with bounding boxes."
+            )
+            episode_lengths = [
+                meta.episodes[ep_id]["length"] for ep_id in episodes
+            ]
             episode_start_indices = np.cumsum([0] + episode_lengths)[:-1]
             self.filtered_indices = [
-                episode_start_indices[episodes.index(int(r["episode_index"]))] + int(r["frame_index"])
+                episode_start_indices[episodes.index(int(r["episode_index"]))]
+                + int(r["frame_index"])
                 for r in self._bbox_records
             ]
             print(f"Filtered dataset size: {len(self.filtered_indices)}")
@@ -201,7 +215,9 @@ class DontBlindDataset(torch.utils.data.Dataset):
         bbox_idx = self._bbox_idx_map.get((ep_idx, frame_idx), -1)
         if 0 <= bbox_idx < len(self._bbox_records):
             bbox = self._bbox_records[bbox_idx].get("bbox")
-            bbox_coords = [[int(x * 1000) for x in d["bbox_normalized"]] for d in bbox]
+            bbox_coords = [
+                [int(x * 1000) for x in d["bbox_normalized"]] for d in bbox
+            ]
             labels = [d["label"] for d in bbox]
             bbox = [
                 {"bbox_2d": coords, "label": label}
@@ -220,7 +236,9 @@ class DontBlindDataset(torch.utils.data.Dataset):
             PROCESSED_IMAGE_KEY: (img * 255).to(torch.uint8).unsqueeze(0),
             PROCESSED_IMAGE_MASK_KEY: torch.ones((1, 1), dtype=torch.bool),
             PROCESSED_ACTION_KEY: actions if not self.bbox_only else None,
-            PROCESSED_STATE_KEY: torch.randn((state_len, 1), dtype=torch.float32),
+            PROCESSED_STATE_KEY: torch.randn(
+                (state_len, 1), dtype=torch.float32
+            ),
             TASK_KEY: item.get("task"),
             GENERATION_PROMPT_KEY: prompt,
             GENERATION_ANSWER_KEY: answer,
@@ -232,17 +250,24 @@ def _prefetch_required_chunks(
     meta: LeRobotDatasetMetadata,
     download_videos: bool = True,
 ) -> None:
-    chunk_ids: List[int] = sorted({meta.get_episode_chunk(ep_idx) for ep_idx in meta.episodes.keys()})
+    chunk_ids: List[int] = sorted(
+        {meta.get_episode_chunk(ep_idx) for ep_idx in meta.episodes.keys()}
+    )
     if not chunk_ids:
         return
 
-    allow_patterns: List[str] = [f"data/chunk-{chunk_id:03d}/*" for chunk_id in chunk_ids]
+    allow_patterns: List[str] = [
+        f"data/chunk-{chunk_id:03d}/*" for chunk_id in chunk_ids
+    ]
     if download_videos and meta.video_keys:
         for chunk_id in chunk_ids:
             for video_key in meta.video_keys:
-                allow_patterns.append(f"videos/chunk-{chunk_id:03d}/{video_key}/*")
+                allow_patterns.append(
+                    f"videos/chunk-{chunk_id:03d}/{video_key}/*"
+                )
 
     from huggingface_hub import snapshot_download, get_token
+
     print(f"Prefetching with token: {get_token()}")
     snapshot_download(
         repo_id=meta.repo_id,

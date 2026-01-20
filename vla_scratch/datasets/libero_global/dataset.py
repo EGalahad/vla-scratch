@@ -3,7 +3,10 @@ from typing import TYPE_CHECKING
 
 import torch
 import numpy as np
-from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata, LeRobotDataset
+from lerobot.datasets.lerobot_dataset import (
+    LeRobotDatasetMetadata,
+    LeRobotDataset,
+)
 
 from .data_keys import (
     CAM_FRONT_KEY,
@@ -41,16 +44,22 @@ class LIBERODataset(torch.utils.data.Dataset):
         delta_timestamps = {}
         for key in self.cmd_keys:
             delta_timestamps[key] = (
-                np.linspace(0, action_horizon - 1, action_horizon, dtype=int) / fps
+                np.linspace(0, action_horizon - 1, action_horizon, dtype=int)
+                / fps
             ).tolist()
 
         for key in self.state_keys:
             delta_timestamps[key] = (
-                np.linspace(-state_history, 0, state_history + 1, dtype=int) / fps
+                np.linspace(-state_history, 0, state_history + 1, dtype=int)
+                / fps
             ).tolist()
 
         self.lerobot_datasets = [
-            LeRobotDataset(repo_id=repo_id, delta_timestamps=delta_timestamps)
+            LeRobotDataset(
+                repo_id=repo_id,
+                delta_timestamps=delta_timestamps,
+                video_backend=config.video_backend,
+            )
             for repo_id in config.repo_id
         ]
         assert fps == self.lerobot_datasets[0].fps
@@ -69,5 +78,7 @@ class LIBERODataset(torch.utils.data.Dataset):
         item[CAM_FRONT_KEY] = item.pop("images.cam_front")
         item[CAM_WRIST_KEY] = item.pop("images.cam_wrist")
         item[TASK_NAME_KEY] = item.pop("task")
-        item[GRIPPER_CMD_ACTION_KEY] = item[GRIPPER_CMD_ACTION_KEY].unsqueeze(-1)
+        item[GRIPPER_CMD_ACTION_KEY] = item[GRIPPER_CMD_ACTION_KEY].unsqueeze(
+            -1
+        )
         return item
