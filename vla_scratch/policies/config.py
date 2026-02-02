@@ -12,6 +12,7 @@ class PolicyConfig:
     action_horizon: int
     state_dim: Optional[int] = None
     action_dim: Optional[int] = None
+    use_paligemma_tokens: bool = False
 
     def instantiate(self) -> Any:
         policy_cls = locate_class(self._target_)

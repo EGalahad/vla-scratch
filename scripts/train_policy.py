@@ -114,6 +114,8 @@ class TrainConfig:
     policy: PolicyConfig = MISSING
     checkpoint_path: Optional[str] = None
     load_optimizer: bool = True
+    # paligemma coord supervision
+    use_paligemma_tokens: bool = False
     # wandb
     wandb: WandbCfg = field(default_factory=WandbCfg)
 
@@ -140,6 +142,10 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.set_struct(cfg, False)
 
     train_cfg = cast(TrainConfig, OmegaConf.to_object(cfg))
+    if train_cfg.use_paligemma_tokens:
+        os.environ["VLA_USE_PALIGEMMA_TOKENS"] = "1"
+    else:
+        os.environ.pop("VLA_USE_PALIGEMMA_TOKENS", None)
 
     # Resolve checkpoint path (supports file or directory)
     if train_cfg.checkpoint_path is not None:
@@ -191,6 +197,15 @@ def main(cfg: DictConfig) -> None:
     train_cfg.policy.state_dim = dummy_data.observation.state.shape[-1]
 
     with torch.device(device):
+        # Propagate flag into policy and its transforms.
+        setattr(train_cfg.policy, "use_paligemma_tokens", train_cfg.use_paligemma_tokens)
+        for tf in getattr(train_cfg.policy, "transforms", []) or []:
+            if isinstance(tf, dict):
+                target = str(tf.get("_target_", ""))
+                if target.endswith(
+                    "vla_scratch.policies.modules.vlm_bridge.paligemma.processor.PaligemmaProcessor"
+                ):
+                    tf["use_paligemma_tokens"] = train_cfg.use_paligemma_tokens
         policy: "BasePolicy" = train_cfg.policy.instantiate()
 
     # Warmup pass

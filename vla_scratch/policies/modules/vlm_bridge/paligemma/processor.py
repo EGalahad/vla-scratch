@@ -26,6 +26,10 @@ class PaligemmaProcessor(TransformFn):
     """Prepare image + prompt inputs for PaliGemma VLM bridges."""
 
     @staticmethod
+    def _paligemma_loc_tokens() -> list[str]:
+        return [f"<loc{i:04d}>" for i in range(1024)]
+
+    @staticmethod
     def _resolve_model_id(model_id: str) -> tuple[str, bool]:
         """Resolve relative local paths even after Hydra changes cwd.
 
@@ -47,6 +51,7 @@ class PaligemmaProcessor(TransformFn):
         truncation: bool = True,
         padding: str = "max_length",
         target_size: Tuple[int, int] = (224, 224),
+        use_paligemma_tokens: bool = False,
     ) -> None:
         self.target_size = tuple(int(s) for s in target_size)
         processors = importlib.import_module("transformers")
@@ -57,6 +62,14 @@ class PaligemmaProcessor(TransformFn):
             local_files_only=is_local,
         )
         self.tokenizer = self.processor.tokenizer
+        self.use_paligemma_tokens = bool(use_paligemma_tokens)
+
+        if self.use_paligemma_tokens:
+            # These tokens are present in PaliGemma's vocab but may not be treated
+            # as atomic tokens unless explicitly registered with the tokenizer.
+            loc_tokens = self._paligemma_loc_tokens()
+            # Use special_tokens=False so they behave like content tokens.
+            self.tokenizer.add_tokens(loc_tokens, special_tokens=False)
 
         self.truncation = truncation
         self.padding = padding
@@ -73,6 +86,7 @@ class PaligemmaProcessor(TransformFn):
         num_images = images.shape[0]
         prompt = "".join(["<image>"] * num_images + [prompt])
         suffix = sample.observation.generation_answer
+
         encoded = self.processor(
             text=prompt,
             images=images_list,

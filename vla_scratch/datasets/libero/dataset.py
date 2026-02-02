@@ -21,6 +21,11 @@ from vla_scratch.transforms.data_keys import (
     GENERATION_PROMPT_KEY,
     GENERATION_ANSWER_KEY,
 )
+from vla_scratch.datasets.utils.paligemma_bbox_format import (
+    paligemma_detect_answer,
+    paligemma_detect_prompt,
+    use_paligemma_tokens_enabled,
+)
 
 if TYPE_CHECKING:
     from vla_scratch.datasets.libero.config import LiberoConfig
@@ -189,20 +194,26 @@ class LIBERODataset(torch.utils.data.Dataset):
                 bbox_idx = self._bbox_idx_map.get((ep_idx, frame_idx), -1)
                 if 0 <= bbox_idx < len(self._bbox_records):
                     bbox = self._bbox_records[bbox_idx].get("bbox") or []
-                    bbox_coords = [
-                        [int(x * 1000) for x in d["bbox_normalized"]]
-                        for d in bbox
-                    ]
                     labels = [d["label"] for d in bbox]
-                    bbox_out = [
-                        {"bbox_2d": coords, "label": label}
-                        for coords, label in zip(bbox_coords, labels)
-                    ]
-                    prompt = (
-                        "Please return bounding boxes for all task-relevant objects in JSON format as"
-                        '[{"bbox_2d": [x1, y1, x2, y2], "label": "<object_name>"}]'
-                    )
-                    answer = json.dumps(bbox_out)
+                    if use_paligemma_tokens_enabled():
+                        prompt = paligemma_detect_prompt()
+                        answer = paligemma_detect_answer(
+                            [d["bbox_normalized"] for d in bbox], labels
+                        )
+                    else:
+                        bbox_coords = [
+                            [int(x * 1000) for x in d["bbox_normalized"]]
+                            for d in bbox
+                        ]
+                        bbox_out = [
+                            {"bbox_2d": coords, "label": label}
+                            for coords, label in zip(bbox_coords, labels)
+                        ]
+                        prompt = (
+                            "Please return bounding boxes for all task-relevant objects in JSON format as"
+                            '[{"bbox_2d": [x1, y1, x2, y2], "label": "<object_name>"}]'
+                        )
+                        answer = json.dumps(bbox_out)
 
         processed = {
             PROCESSED_IMAGE_KEY: img,
