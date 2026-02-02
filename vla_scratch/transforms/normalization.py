@@ -113,12 +113,14 @@ def load_norm_stats(
             stats_path = expected
         else:
             candidates = sorted(stats_dir.glob("*.npz"))
-            if len(candidates) == 1:
-                stats_path = candidates[0]
-            else:
-                raise FileNotFoundError(
-                    f"Could not resolve norm stats in {stats_dir}; expected {expected.name}"
+            suffix = ""
+            if candidates:
+                suffix = "\nAvailable candidates:\n" + "\n".join(
+                    f"- {p.name}" for p in candidates
                 )
+            raise FileNotFoundError(
+                f"Could not resolve norm stats in {stats_dir}; expected {expected.name}.{suffix}"
+            )
 
     loaded = np.load(stats_path, allow_pickle=True)
     try:
@@ -209,6 +211,14 @@ class Normalize(torch.nn.Module):
                     raise KeyError(f"Missing key '{key}' for normalization")
                 continue
             if (val := sample[key]) is not None:
+                if stats.mean_.shape[0] < val.shape[0]:
+                    raise RuntimeError(
+                        "Normalization stats length mismatch for key "
+                        f"'{key}': stats horizon={stats.mean_.shape[0]} "
+                        f"but tensor horizon={val.shape[0]}. "
+                        "This usually means you loaded norm stats for a different "
+                        "action_horizon/state_history than your current run."
+                    )
                 stats_slice = cast(FieldNormStats, stats[: val.shape[0]])
                 normalized = self._fn(val, stats_slice)
                 if self.enable_aug:

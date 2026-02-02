@@ -4,6 +4,10 @@ mjcf
 /outputs
 *.log
 
+pretrained_models
+data
+norm_stats
+
 *.egg-info
 __pycache__
 

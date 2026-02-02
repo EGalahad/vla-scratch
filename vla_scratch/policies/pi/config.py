@@ -51,7 +51,7 @@ class PiConfig(PolicyConfig):
 
 pi_paligemma_config = PiConfig(
     _target_="vla_scratch.policies.pi.policy.PiPolicy",
-    model_id="google/paligemma-3b-mix-224",
+    model_id="./pretrained_models/paligemma-3b-mix-224",
     vlm_type="PaliGemmaForConditionalGeneration",
     state_history=1,
     action_horizon=10,
@@ -59,7 +59,7 @@ pi_paligemma_config = PiConfig(
         {
             "_target_": "vla_scratch.policies.modules.vlm_bridge.paligemma.processor.PaligemmaProcessor",
             "processor_class": "PaliGemmaProcessor",
-            "model_id": "google/paligemma-3b-mix-224",
+            "model_id": "./pretrained_models/paligemma-3b-mix-224",
             "max_length": 550,
             "target_size": (224, 224),
         }

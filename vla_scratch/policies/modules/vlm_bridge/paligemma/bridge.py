@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import List, Optional, Tuple, TYPE_CHECKING, Dict
 
 import einops
@@ -22,6 +23,7 @@ from vla_scratch.policies.modules.vlm_bridge.paligemma.utils import (
     replace_paligemma_forward,
 )
 from vla_scratch.policies.utils.transformers import make_att_2d_masks
+from vla_scratch.utils.paths import REPO_ROOT
 
 if TYPE_CHECKING:
     from transformers.models.paligemma.modeling_paligemma import (
@@ -32,6 +34,20 @@ if TYPE_CHECKING:
 
 
 class PaligemmaBridge(VLMBridge):
+    @staticmethod
+    def _resolve_model_id(model_id: str) -> tuple[str, bool]:
+        """Resolve relative local paths even after Hydra changes cwd.
+
+        Returns (resolved_id, is_local_path).
+        """
+        p = Path(model_id).expanduser()
+        if p.exists():
+            return str(p.resolve()), True
+        p2 = (REPO_ROOT / p).resolve()
+        if p2.exists():
+            return str(p2), True
+        return model_id, False
+
     def __init__(self, *, model_id: str, vlm_type: str, max_length: int = 64):
         super().__init__()
         self.max_length = max_length
@@ -44,17 +60,21 @@ class PaligemmaBridge(VLMBridge):
                 f"transformers has no class named '{vlm_type}'."
             ) from e
 
+        resolved_id, is_local = self._resolve_model_id(model_id)
         self.causal_model: "PaliGemmaForConditionalGeneration" = (
             vlm_cls.from_pretrained(
-                model_id,
+                resolved_id,
                 attn_implementation="sdpa",
                 trust_remote_code=True,
                 device_map=torch.cuda.current_device(),
+                local_files_only=is_local,
             )
         )
 
         PaliGemmaProcessor = getattr(tfm, "PaliGemmaProcessor")
-        self.processor = PaliGemmaProcessor.from_pretrained(model_id)
+        self.processor = PaliGemmaProcessor.from_pretrained(
+            resolved_id, local_files_only=is_local
+        )
         self.tokenizer = self.processor.tokenizer
 
         replace_paligemma_forward()

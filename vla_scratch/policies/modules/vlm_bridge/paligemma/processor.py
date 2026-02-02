@@ -1,4 +1,5 @@
 import importlib
+from pathlib import Path
 from typing import Optional, Tuple, TYPE_CHECKING
 
 import torch
@@ -6,6 +7,7 @@ from tensordict import TensorClass
 
 from vla_scratch.transforms.base import TransformFn
 from vla_scratch.policies.modules.vlm_bridge.base import TARGET_IGNORE_ID
+from vla_scratch.utils.paths import REPO_ROOT
 
 if TYPE_CHECKING:
     from vla_scratch.transforms.data_types import DataSample
@@ -23,6 +25,20 @@ class PaligemmaPolicyInput(TensorClass):
 class PaligemmaProcessor(TransformFn):
     """Prepare image + prompt inputs for PaliGemma VLM bridges."""
 
+    @staticmethod
+    def _resolve_model_id(model_id: str) -> tuple[str, bool]:
+        """Resolve relative local paths even after Hydra changes cwd.
+
+        Returns (resolved_id, is_local_path).
+        """
+        p = Path(model_id).expanduser()
+        if p.exists():
+            return str(p.resolve()), True
+        p2 = (REPO_ROOT / p).resolve()
+        if p2.exists():
+            return str(p2), True
+        return model_id, False
+
     def __init__(
         self,
         processor_class: str,
@@ -35,8 +51,10 @@ class PaligemmaProcessor(TransformFn):
         self.target_size = tuple(int(s) for s in target_size)
         processors = importlib.import_module("transformers")
         processor_cls = getattr(processors, processor_class)
+        resolved_id, is_local = self._resolve_model_id(model_id)
         self.processor: "PaliGemmaProcessor" = processor_cls.from_pretrained(
-            model_id
+            resolved_id,
+            local_files_only=is_local,
         )
         self.tokenizer = self.processor.tokenizer
 

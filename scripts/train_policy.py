@@ -100,7 +100,7 @@ class TrainConfig:
     log_interval: int = 32
     eval_interval: int = 512
     epochs: int = 20
-    save_interval: int = 10  # in epochs
+    save_interval: int = 2  # in epochs
 
     # data
     data: DataConfig = MISSING
@@ -278,7 +278,9 @@ def main(cfg: DictConfig) -> None:
         name: max(1, len(loader) // train_cfg.grad_accum_steps)
         for name, loader in train_loaders.items()
     }
-    steps_per_epoch = min(steps_per_epoch_by_name.values())
+    # Use the longest dataset to define epoch length.
+    # Shorter datasets will wrap around within the epoch.
+    steps_per_epoch = max(steps_per_epoch_by_name.values())
     last_time = time.perf_counter()
     log_tds = []
 
@@ -321,7 +323,16 @@ def main(cfg: DictConfig) -> None:
             for _ in range(train_cfg.grad_accum_steps):
                 for train_key, data_loader_iter in data_loader_iters.items():
                     torch.cuda.nvtx.range_push("DataLoader")
-                    data_sample, perf_dict = next(data_loader_iter)
+                    try:
+                        data_sample, perf_dict = next(data_loader_iter)
+                    except StopIteration:
+                        # If this dataset is shorter than the max steps per epoch,
+                        # restart its iterator and continue sampling.
+                        data_loader_iters[train_key] = iter(
+                            train_loaders[train_key]
+                        )
+                        data_loader_iter = data_loader_iters[train_key]
+                        data_sample, perf_dict = next(data_loader_iter)
                     data_sample: "DataSample" = data_sample.to(
                         device, non_blocking=True
                     )

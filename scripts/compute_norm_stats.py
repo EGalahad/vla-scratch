@@ -119,6 +119,12 @@ def compute_and_save_norm_stats(
     action_tensor = stacked.action_chunk.actions
 
     def _compute_norm_stats_for_tensor(tensor: torch.Tensor) -> FieldNormStats:
+        if tensor.numel() == 0:
+            raise ValueError(
+                "Cannot compute norm stats on an empty tensor. "
+                "This can happen if you set policy.state_history=0 (no state) "
+                "but still try to compute state normalization statistics."
+            )
         mean = tensor.mean(dim=0)
         std = tensor.std(dim=0, unbiased=False)
         q01 = torch.quantile(tensor, 0.01, dim=0)
@@ -127,10 +133,16 @@ def compute_and_save_norm_stats(
             mean_=mean, std_=std, q01=q01, q99=q99, batch_size=tensor.shape[1:]
         )
 
-    stats = {
-        PROCESSED_STATE_KEY: _compute_norm_stats_for_tensor(state_tensor),
-        PROCESSED_ACTION_KEY: _compute_norm_stats_for_tensor(action_tensor),
-    }
+    stats: NormStats = {}
+    # If state_history == 0, many datasets represent "no state" as an empty tensor.
+    # Skip state stats in that case (training can set policy.use_state=False).
+    if state_tensor is not None and state_tensor.numel() > 0:
+        stats[PROCESSED_STATE_KEY] = _compute_norm_stats_for_tensor(state_tensor)
+    else:
+        print(
+            f"Skipping state norm stats (state tensor is empty; state_history={data_config.state_history})."
+        )
+    stats[PROCESSED_ACTION_KEY] = _compute_norm_stats_for_tensor(action_tensor)
 
     stats_path = save_norm_stats(output_dir, data_config, policy_config, stats)
     print(f"Saved normalization stats to: {stats_path}")
