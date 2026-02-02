@@ -32,4 +32,4 @@ uv run torchrun --standalone --nnodes=1 --nproc_per_node=8 \
 ```
 
 ### Evaluation
-See [examples](examples/README.md) for details about evaluation in LIBERO and other simulation environments.
+See [examples](../examples/README.md) for details about evaluation in LIBERO and other simulation environments.
