@@ -26,7 +26,7 @@ Pretrained checkpoints: [wandb runs](https://wandb.ai/elijahgalahad/vla-scratch/
 Set up simulation virtual environment (`examples/libero/.venv`):
 ```bash
 # 1) Clone LIBERO repository
-git clone git@github.com:Lifelong-Robot-Learning/LIBERO.git ../LIBERO
+git clone https://github.com/Lifelong-Robot-Learning/LIBERO.git ../LIBERO
 export LIBERO_ROOT=$(pwd)/../LIBERO
 
 # 2) Install dependencies with uv
