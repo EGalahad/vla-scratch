@@ -252,23 +252,27 @@ def main(cfg: DictConfig) -> None:
             request = server.wait_for_request()
             if request is None:
                 continue
+
+            # Extract client_id for routing (added by ROUTER socket)
+            client_id = request.pop("_client_id", None)
             msg_type = request.get("type", "infer")
+
             if msg_type == "reset":
                 policy.reset()
-                server.send_response({"status": "ok"})
+                response = {"status": "ok"}
+                if client_id is not None:
+                    response["_client_id"] = client_id
+                server.send_response(response)
                 continue
 
             obs = {k: v for k, v in request.items() if k != "type"}
-            # for key, value in obs.items():
-            #     if isinstance(value, list):
-            #         obs[key] = np.array(value)
-            #     print(f"obs[{key}]: {type(obs[key])} {obs[key].shape if isinstance(obs[key], np.ndarray) else ''}")
-            # print("---")
             t0 = time.monotonic()
             action = policy.infer(obs)
             infer_s = time.monotonic() - t0
             response = dict(action)
             response["server_timing"] = {"infer_s": infer_s}
+            if client_id is not None:
+                response["_client_id"] = client_id
             server.send_response(response)
     except KeyboardInterrupt:
         logger.info("Shutting down server loop.")

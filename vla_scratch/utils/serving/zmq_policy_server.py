@@ -1,5 +1,6 @@
 import logging
 import threading
+import queue
 from typing import Any, Dict, List, Optional, Tuple
 
 import msgpack
@@ -10,12 +11,11 @@ logger = logging.getLogger(__name__)
 
 
 class ZmqPolicyServer:
-    """Thin ZMQ REP server that only handles transport.
+    """ZMQ ROUTER server that handles multiple concurrent clients.
 
-    A background thread receives raw multipart requests, exposes them via
-    `wait_for_request`, and blocks until the main loop responds with
-    `send_response`. This keeps policy inference in the caller (e.g. serve_policy)
-    while maintaining the same over-the-wire protocol as before.
+    Uses a ROUTER socket to accept connections from multiple clients simultaneously.
+    Each request is queued and processed by the main loop, with responses routed
+    back to the correct client using ZMQ's identity frames.
     """
 
     def __init__(
@@ -23,22 +23,27 @@ class ZmqPolicyServer:
         *,
         host: str = "0.0.0.0",
         port: int | None = None,
+        max_queue_size: int = 100,
     ) -> None:
         self._host = host
         self._port = port or 0
+        self._max_queue_size = max_queue_size
 
         self._context = zmq.Context.instance()
-        self._socket: zmq.Socket = self._context.socket(zmq.REP)
-        self._socket.linger = 0
+        self._socket: zmq.Socket = self._context.socket(zmq.ROUTER)
+        self._socket.setsockopt(zmq.LINGER, 0)
+        self._socket.setsockopt(zmq.ROUTER_MANDATORY, 0)
         endpoint = self._endpoint()
         self._socket.bind(endpoint)
-        logger.info("ZMQ REP server bound at %s", endpoint)
+        logger.info("ZMQ ROUTER server bound at %s", endpoint)
 
-        self._cv = threading.Condition()
-        self._pending_request: Optional[Dict[str, Any]] = None
-        self._pending_response: Optional[Dict[str, Any]] = None
+        # Queue for incoming requests: (client_id, request_dict)
+        self._request_queue: queue.Queue = queue.Queue(maxsize=max_queue_size)
+        # Dict for outgoing responses: client_id -> response_dict
+        self._response_dict: Dict[bytes, Dict[str, Any]] = {}
+        self._response_lock = threading.Lock()
+
         self._stopped = False
-
         self._thread = threading.Thread(target=self._serve_loop, daemon=True)
         self._thread.start()
 
@@ -51,44 +56,35 @@ class ZmqPolicyServer:
     def wait_for_request(
         self, timeout: float | None = None
     ) -> Optional[Dict[str, Any]]:
-        """Block until a request is available, or timeout."""
-        with self._cv:
-            if self._stopped:
-                return None
-            remaining = timeout
-            while self._pending_request is None and not self._stopped:
-                self._cv.wait(timeout=remaining)
-                if timeout is not None:
-                    remaining = 0.0
-                    if self._pending_request is None:
-                        break
-            if self._stopped:
-                return None
-            return (
-                dict(self._pending_request)
-                if self._pending_request is not None
-                else None
-            )
+        """Block until a request is available, or timeout.
+
+        Returns a dict with the request data, or None if stopped/timeout.
+        """
+        try:
+            if timeout is None:
+                request = self._request_queue.get()
+            else:
+                request = self._request_queue.get(timeout=timeout)
+            return request
+        except queue.Empty:
+            return None
 
     def send_response(self, payload: Dict[str, Any]) -> None:
-        """Provide a response for the currently pending request.
+        """Send a response back to the client.
 
-        If no request is pending (e.g., due to a race or cancellation), we log and drop
-        the payload instead of raising to avoid crashing the caller loop.
+        The response is queued and will be sent by the background thread.
+        The client_id is extracted from the payload (added by wait_for_request).
         """
-        with self._cv:
-            if self._pending_request is None:
-                logger.warning(
-                    "No pending request to respond to; dropping response."
-                )
-                return
-            self._pending_response = dict(payload)
-            self._cv.notify_all()
+        client_id = payload.pop("_client_id", None)
+        if client_id is None:
+            logger.warning("No client_id in response payload; dropping response.")
+            return
+
+        with self._response_lock:
+            self._response_dict[client_id] = dict(payload)
 
     def close(self) -> None:
-        with self._cv:
-            self._stopped = True
-            self._cv.notify_all()
+        self._stopped = True
         try:
             self._socket.close()
         finally:
@@ -96,41 +92,73 @@ class ZmqPolicyServer:
                 self._thread.join(timeout=1.0)
 
     def _serve_loop(self) -> None:
+        """Background thread that handles ZMQ ROUTER socket I/O.
+
+        Receives requests from multiple clients and queues them.
+        Sends responses back to clients when available.
+        """
+        poller = zmq.Poller()
+        poller.register(self._socket, zmq.POLLIN)
+
         try:
             while not self._stopped:
-                try:
-                    frames = self._socket.recv_multipart()
-                except zmq.ZMQError:
-                    break
-                msg = _decode_request(frames)
+                # Poll with timeout to check for responses to send
+                events = dict(poller.poll(timeout=100))  # 100ms timeout
 
-                with self._cv:
-                    while (
-                        self._pending_request is not None and not self._stopped
-                    ):
-                        self._cv.wait()
-                    if self._stopped:
-                        break
-                    self._pending_request = msg
-                    self._cv.notify_all()
-                    while self._pending_response is None and not self._stopped:
-                        self._cv.wait()
-                    if self._stopped:
-                        break
-                    response = self._pending_response
-                    self._pending_response = None
+                # Handle incoming requests
+                if self._socket in events:
+                    try:
+                        frames = self._socket.recv_multipart(zmq.NOBLOCK)
+                        # ROUTER socket: [client_id, empty_frame, ...payload_frames]
+                        if len(frames) < 2:
+                            logger.warning("Received malformed ROUTER frames")
+                            continue
 
-                if response is not None:
-                    _send_reply(self._socket, response)
+                        client_id = frames[0]
+                        payload_frames = frames[2:]  # Skip empty delimiter
 
-                with self._cv:
-                    self._pending_request = None
-                    self._cv.notify_all()
+                        msg = _decode_request(payload_frames)
+                        msg["_client_id"] = client_id  # Attach client ID for routing
+
+                        # Queue the request for processing
+                        try:
+                            self._request_queue.put_nowait(msg)
+                        except queue.Full:
+                            logger.warning("Request queue full, dropping request")
+                            # Send error response
+                            error_resp = {"error": "Server queue full"}
+                            self._send_to_client(client_id, error_resp)
+
+                    except zmq.Again:
+                        pass  # No message available
+                    except Exception as e:
+                        logger.error("Error receiving request: %s", e)
+
+                # Send any pending responses
+                with self._response_lock:
+                    clients_to_remove = []
+                    for client_id, response in list(self._response_dict.items()):
+                        try:
+                            self._send_to_client(client_id, response)
+                            clients_to_remove.append(client_id)
+                        except Exception as e:
+                            logger.error("Error sending response to client: %s", e)
+                            clients_to_remove.append(client_id)
+
+                    for client_id in clients_to_remove:
+                        self._response_dict.pop(client_id, None)
+
         finally:
             try:
                 self._socket.close()
             except Exception:
                 pass
+
+    def _send_to_client(self, client_id: bytes, payload: Dict[str, Any]) -> None:
+        """Send a response to a specific client via ROUTER socket."""
+        frames = _encode_reply(payload)
+        # ROUTER format: [client_id, empty_frame, ...payload_frames]
+        self._socket.send_multipart([client_id, b""] + frames)
 
 
 def _decode_request(frames: List[bytes]) -> Dict[str, Any]:
@@ -201,7 +229,8 @@ def _assign_path(d: Dict[str, Any], path: List[str], value: Any) -> None:
     cur[path[-1]] = value
 
 
-def _send_reply(socket: zmq.Socket, payload: Dict[str, Any]) -> None:
+def _encode_reply(payload: Dict[str, Any]) -> List[bytes]:
+    """Encode a response payload into multipart frames."""
     items: List[Dict[str, Any]] = []
     frames: List[bytes] = []
     inline: Dict[str, Any] = {}
@@ -239,4 +268,4 @@ def _send_reply(socket: zmq.Socket, payload: Dict[str, Any]) -> None:
         "items": items,
         "inline": inline,
     }
-    socket.send_multipart([msgpack.packb(header)] + frames)
+    return [msgpack.packb(header)] + frames
