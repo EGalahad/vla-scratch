@@ -5,7 +5,7 @@
 Evaluate a policy on a dataset using Hydra configs (mirrors train_policy grammar).
 
 - Expects data and policy groups (e.g., data=libero-spatial, policy=pi-qwen)
-- Optionally loads a checkpoint and computes MSE over a subset
+- Optionally loads a checkpoint and computes sample MSE or generation loss over a subset
 """
 
 from contextlib import nullcontext
@@ -31,6 +31,7 @@ from vla_scratch.utils.checkpoint import (
     merge_policy_cfg_from_checkpoint,
 )
 from vla_scratch.helpers.training import eval_sample_mse
+from vla_scratch.helpers.training import eval_generation
 
 if TYPE_CHECKING:
     from vla_scratch.transforms.data_types import DataSample
@@ -53,6 +54,7 @@ class EvalConfig:
     policy: PolicyConfig = MISSING
 
     # Eval controls
+    eval_type: str = "sample_mse"  # "sample_mse" or "generation"
     batch_size: int = 32
     num_workers: int = 16
     num_samples: int = 512
@@ -145,17 +147,41 @@ def main(cfg: DictConfig) -> None:
         else nullcontext()
     )
     with autocast_ctx:
-        mse = eval_sample_mse(
-            model,
-            loader,
-            device,
-            num_sample_steps=int(eval_cfg.num_steps),
-            local_rank=0,
-        )
-        mse = mse["sample_mse"]
-    print(
-        f"Eval MSE over {num} samples (batch={eval_cfg.batch_size}, steps={eval_cfg.num_steps}): {mse:.6f}"
-    )
+        if eval_cfg.eval_type == "sample_mse":
+            metrics = eval_sample_mse(
+                model,
+                loader,
+                device,
+                num_sample_steps=int(eval_cfg.num_steps),
+                local_rank=0,
+            )
+            mse = float(metrics["sample_mse"])
+            print(
+                "Eval sample MSE over "
+                f"{num} samples (batch={eval_cfg.batch_size}, steps={eval_cfg.num_steps}): "
+                f"{mse:.6f}"
+            )
+        elif eval_cfg.eval_type == "generation":
+            metrics = eval_generation(
+                model=model,
+                dataloader=loader,
+                device=device,
+                local_rank=0,
+            )
+            metrics_flat = metrics.flatten_keys(separator="/").to_dict(
+                convert_tensors=True
+            )
+            metrics_str = ", ".join(
+                f"{k}={float(v):.6f}" for k, v in sorted(metrics_flat.items())
+            )
+            print(
+                f"Eval generation loss over {num} samples (batch={eval_cfg.batch_size}): "
+                f"{metrics_str}"
+            )
+        else:
+            raise ValueError(
+                f"Unsupported eval_type='{eval_cfg.eval_type}', expected 'sample_mse' or 'generation'."
+            )
 
 
 if __name__ == "__main__":

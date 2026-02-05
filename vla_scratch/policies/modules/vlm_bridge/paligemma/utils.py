@@ -35,14 +35,28 @@ def _siglip_encoder_foward(
 def _gemma_decoder_layer_custom_forward(
     self: "GemmaDecoderLayer",
     hidden_states,
-    prefix_att_mask,
-    position_embeddings,
+    *args,
+    **kwargs,
 ):
-    """Custom forward for a GemmaDecoderLayer used in prefix encoding.
+    """GemmaDecoderLayer.forward replacement.
 
-    This mirrors the previous inline `compute_layer` function, but is defined
-    as a bound method that attaches to `GemmaDecoderLayer` as `custom_forward`.
+    We use a custom, faster forward path during prefix encoding (see
+    `PaligemmaBridge.encode`) where we call the layer as:
+
+        layer(hidden_states, prefix_att_mask, position_embeddings)
+
+    However, HuggingFace `transformers` may call `GemmaDecoderLayer.forward`
+    with keyword arguments like `attention_mask=...`. Since we monkeypatch the
+    layer's `forward` method, this wrapper must remain compatible with the
+    upstream signature and fall back to the original implementation when the
+    call is not the prefix-encoding fast path.
     """
+    if len(args) >= 2 and torch.is_tensor(args[0]) and args[0].dim() == 4:
+        prefix_att_mask = args[0]
+        position_embeddings = args[1]
+    else:
+        return orig_gemma_layer_forward(self, hidden_states, *args, **kwargs)
+
     pre_att = self.input_layernorm(hidden_states)
     input_shape = hidden_states.shape[:-1]  # [batch_size, seq_len]
     head_shape = (*input_shape, -1, self.self_attn.head_dim)
@@ -89,10 +103,16 @@ def _gemma_decoder_layer_custom_forward(
 def _gemma2_decoder_layer_custom_forward(
     self: "Gemma2DecoderLayer",
     hidden_states,
-    prefix_att_mask,
-    position_embeddings,
+    *args,
+    **kwargs,
 ):
-    """Custom forward for a GemmaDecoderLayer used in prefix encoding."""
+    """Gemma2DecoderLayer.forward replacement (see `_gemma_decoder_layer_custom_forward`)."""
+    if len(args) >= 2 and torch.is_tensor(args[0]) and args[0].dim() == 4:
+        prefix_att_mask = args[0]
+        position_embeddings = args[1]
+    else:
+        return orig_gemma2_layer_forward(self, hidden_states, *args, **kwargs)
+
     redisual = hidden_states
 
     pre_att = self.input_layernorm(hidden_states)

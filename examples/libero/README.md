@@ -3,7 +3,7 @@
 ## 🚀 Policy Serving
 ```bash
 uv run scripts/serve_policy.py \
-    checkpoint_path=hf:<checkpoint_id> \
+    checkpoint_path=outputs/2026-02-01/17-06-47-pi05_libero120/checkpoint_20 \
     data=libero-spatial \
     merge_policy_cfg=true
 ```
@@ -43,10 +43,10 @@ source examples/libero/.venv/bin/activate
 export LIBERO_ROOT=$(pwd)/../LIBERO
 export PYTHONPATH=$PYTHONPATH:$LIBERO_ROOT
 
-python examples/libero/simulation.py \
+MUJOCO_GL=osmesa python examples/libero/simulation.py \
     host=127.0.0.1 port=8000 \
     libero_task_suite=libero_spatial \
-    headless=false \
+    headless=true \
     action_chunk_size=5 \
     episodes_per_task=10
 ```

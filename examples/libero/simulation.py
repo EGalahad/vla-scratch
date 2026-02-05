@@ -142,6 +142,7 @@ def rollout_task(
     task_description: str,
     cfg: LiberoEvalConfig,
     episode_idx: int,
+    init_state: Optional[Any] = None,
 ) -> bool:
     state_len = cfg.state_history + 1
     pos_hist: Deque[np.ndarray] = deque(maxlen=state_len)
@@ -149,6 +150,8 @@ def rollout_task(
     grip_hist: Deque[np.ndarray] = deque(maxlen=state_len)
 
     obs = env.reset()
+    if init_state is not None:
+        obs = env.set_init_state(init_state)
 
     # Allow environment to settle
     for _ in range(cfg.settle_steps):
@@ -226,7 +229,23 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.set_struct(cfg, False)
     args = cast(LiberoEvalConfig, OmegaConf.to_object(cfg))
 
-    from libero.libero import benchmark, get_libero_path
+    # Align ER-suite rollout horizon with the ER evaluation defaults.
+    if args.libero_task_suite == "er_spatial":
+        args.max_steps = 350
+    elif args.libero_task_suite == "er_object":
+        args.max_steps = 350
+    elif args.libero_task_suite == "er_goal":
+        args.max_steps = 350
+    elif args.libero_task_suite == "er_sequential":
+        args.max_steps = 800
+
+    # LIBERO has two common package layouts:
+    # - upstream-style: `from libero.libero import ...`
+    # - this-repo/libero_er-style: `from libero import ...`
+    try:
+        from libero.libero import benchmark, get_libero_path  # type: ignore
+    except Exception:
+        from libero import benchmark, get_libero_path  # type: ignore
     from libero.libero.envs import OffScreenRenderEnv
     from libero.libero.envs.env_wrapper import ControlEnv
 
@@ -251,8 +270,34 @@ def main(cfg: DictConfig) -> None:
 
     successes = []
     episode_idx = 0
+    init_states_cache: Dict[str, Any] = {}
     for task_id in range(task_suite.n_tasks):
         task = task_suite.get_task(task_id)
+        init_states_file = os.path.join(
+            get_libero_path("init_states"),
+            task.problem_folder,
+            task.init_states_file,
+        )
+        init_states = None
+        if os.path.exists(init_states_file):
+            if init_states_file not in init_states_cache:
+                import torch
+
+                # NOTE: These init-state files are not model weights; they are typically
+                # pickled numpy arrays / tensors saved by LIBERO tooling.
+                #
+                # PyTorch 2.6 changed `torch.load` default `weights_only` to True, which
+                # can break loading arbitrary pickled objects unless allowlisted.
+                # We explicitly set `weights_only=False` for these local benchmark files.
+                try:
+                    init_states_cache[init_states_file] = torch.load(
+                        init_states_file, weights_only=False
+                    )
+                except TypeError:
+                    # Older PyTorch versions don't support `weights_only`.
+                    init_states_cache[init_states_file] = torch.load(init_states_file)
+            init_states = init_states_cache[init_states_file]
+
         env_args = {
             "bddl_file_name": os.path.join(
                 get_libero_path("bddl_files"),
@@ -272,12 +317,22 @@ def main(cfg: DictConfig) -> None:
         task_desc = task.language
         for i in range(args.episodes_per_task):
             print(f"[task {task_id} ep {i:02d}]: {task_desc}")
+            init_state = None
+            if init_states is not None:
+                try:
+                    num_states = len(init_states)
+                except TypeError:
+                    num_states = int(getattr(init_states, "shape", [0])[0])
+                if num_states > 0:
+                    idx = (args.seed + i) % num_states
+                    init_state = init_states[idx]
             success = rollout_task(
                 client,
                 env,
                 task_desc,
                 args,
                 episode_idx=episode_idx,
+                init_state=init_state,
             )
             successes.append(success)
             episode_idx += 1

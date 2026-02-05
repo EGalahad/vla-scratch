@@ -7,6 +7,7 @@ mjcf
 pretrained_models
 data
 norm_stats
+libero_er
 
 *.egg-info
 __pycache__
@@ -17,5 +18,6 @@ __pycache__
 
 prompt
 
+.cache
 /*.sh
 /*.png

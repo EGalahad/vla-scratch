@@ -158,9 +158,24 @@ def main(cfg: DictConfig) -> None:
     data_cfg: DataConfig = run_cfg.data
     policy_cfg: PolicyConfig = run_cfg.policy
 
-    # Keep temporal params aligned if one is overridden
-    data_cfg.action_horizon = policy_cfg.action_horizon
-    data_cfg.state_history = policy_cfg.state_history
+    # Keep temporal params aligned.
+    #
+    # Callers often override `data.action_horizon`/`data.state_history` on the CLI
+    # and expect those values to drive the stats shape + filename. Previously we
+    # overwrote the data values with policy defaults, which was surprising.
+    #
+    # Rule:
+    # - If data.* is set, it wins and we align policy.* to it.
+    # - Otherwise, fall back to policy.* and copy into data.*.
+    if data_cfg.action_horizon is not None:
+        policy_cfg.action_horizon = data_cfg.action_horizon
+    else:
+        data_cfg.action_horizon = policy_cfg.action_horizon
+
+    if data_cfg.state_history is not None:
+        policy_cfg.state_history = data_cfg.state_history
+    else:
+        data_cfg.state_history = policy_cfg.state_history
 
     print(
         f"Computing norm stats for data={data_cfg._target_} policy={policy_cfg._target_} "

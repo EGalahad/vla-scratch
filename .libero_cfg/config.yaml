@@ -1,0 +1,5 @@
+benchmark_root: /mnt/project_rlinf/yangxinye/vla-scratch/libero_er/libero/libero
+bddl_files: /mnt/project_rlinf/yangxinye/vla-scratch/libero_er/libero/libero/bddl_files
+init_states: /mnt/project_rlinf/yangxinye/vla-scratch/libero_er/libero/libero/init_files
+datasets: /mnt/project_rlinf/yangxinye/vla-scratch/.libero_datasets
+assets: /mnt/project_rlinf/yangxinye/vla-scratch/libero_er/libero/libero/assets
