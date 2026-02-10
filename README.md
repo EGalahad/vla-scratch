@@ -1,11 +1,11 @@
-# VLA-Scratch: a Modular, Performant, Efficient Stack For Vision-Language-Action Models
+# VLA-Scratch
 
 [![PyTorch FSDP2](https://img.shields.io/badge/PyTorch-FSDP2-ee4c2c?logo=pytorch&logoColor=white)](https://docs.pytorch.org/docs/main/distributed.fsdp.fully_shard.html)
 [![PyTorch TensorDict](https://img.shields.io/badge/PyTorch-TensorDict-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/tensordict/)
 [![Qwen3-VL](https://img.shields.io/badge/Qwen3-VL-1d9bf0?logo=github&logoColor=white)](https://github.com/QwenLM/Qwen3-VL)
 [![Checkpoints](https://img.shields.io/badge/Checkpoints-1d9bf0?logo=huggingface&logoColor=white)](https://huggingface.co/collections/elijahgalahad/vla-scratch)
 
-VLA-Scratch is a modular, performant stack with minimal dependencies that makes training, evaluating, and serving Vision-Language-Action (VLA) models fast and approachable.
+VLA-Scratch is a modular, performant and efficient stack with minimal dependencies that makes training, evaluating, and serving Vision-Language-Action (VLA) models fast and approachable.
 
 ---
 
