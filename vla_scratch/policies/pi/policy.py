@@ -18,6 +18,7 @@ from vla_scratch.policies.modules.action_expert import DiTModel
 from vla_scratch.policies.modules.vlm_bridge import (
     Qwen3VLBridge,
     PaligemmaBridge,
+    Pi05Bridge,
     SmolVLMBridge,
 )
 
@@ -68,6 +69,11 @@ class PiPolicy(BasePolicy):
             self.vlm_bridge = PaligemmaBridge(
                 model_id=config.model_id,
                 vlm_type=config.vlm_type,
+            )
+        elif config.vlm_type == "Pi05VLM":
+            self.vlm_bridge = Pi05Bridge()
+            config.vlm_weight_metadata = (
+                self.vlm_bridge.weight_metadata
             )
         elif config.vlm_type == "Qwen3VLForConditionalGeneration":
             self.vlm_bridge = Qwen3VLBridge(
@@ -167,6 +173,9 @@ class PiPolicy(BasePolicy):
         )
 
     def initialize_weights(self):
+        vlm_versions = tuple(
+            parameter._version for parameter in self.vlm_bridge.parameters()
+        )
         if self.config.suffix_add_pos_emb:
             nn.init.normal_(
                 self.position_embedding_state,
@@ -185,6 +194,20 @@ class PiPolicy(BasePolicy):
                 std=self.config.obs_register_init_gain,
             )
         self.action_expert.initialize_weights()
+        for module in (
+            self.action_in_proj,
+            self.action_out_proj,
+            self.state_in_proj,
+            self.time_mlp,
+        ):
+            for child in module.modules():
+                if isinstance(child, nn.Linear):
+                    nn.init.xavier_uniform_(child.weight)
+                    if child.bias is not None:
+                        nn.init.zeros_(child.bias)
+        assert vlm_versions == tuple(
+            parameter._version for parameter in self.vlm_bridge.parameters()
+        ), "initialize_weights() must not modify pretrained VLM parameters"
 
     def apply_fsdp(self, param_type, reduce_type, output_dtype, mesh):
         """Helper function to apply FSDP to a module with given mixed precision policy."""

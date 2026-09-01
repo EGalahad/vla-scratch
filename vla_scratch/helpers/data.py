@@ -51,6 +51,15 @@ def make_transforms(specs: Sequence[Any]) -> List["TransformFn"]:
     return [instantiate_transform(spec) for spec in specs]
 
 
+def _set_transform_training(
+    transforms: Sequence["TransformFn"], enabled: bool
+) -> None:
+    for transform in transforms:
+        setter = getattr(transform, "set_training", None)
+        if callable(setter):
+            setter(enabled)
+
+
 def build_input_transforms(
     data_cfg: "DataConfig",
     policy_cfg: "PolicyConfig",
@@ -72,6 +81,7 @@ def build_input_transforms(
         ]
 
     policy_tfs = make_transforms(policy_cfg.transforms)
+    _set_transform_training(policy_tfs, add_noise)
     return dataset_tfs + norm_tf + [ToDataSample()] + policy_tfs
 
 
@@ -121,6 +131,7 @@ def create_dataset(
         if not skip_policy_transforms
         else []
     )
+    _set_transform_training(policy_tfs, add_noise)
 
     pipeline = dataset_tfs + norm_tf + [ToDataSample()] + policy_tfs
 

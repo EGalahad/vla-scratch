@@ -18,6 +18,7 @@ dependencies = [
     "einops",
     "tensordict",
     "transformers==4.57.1",
+    "safetensors",
     "lerobot @ git+https://github.com/huggingface/lerobot@v0.4.2",
     "num2words", # for smolvlm
     "jsonlines",

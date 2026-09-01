@@ -1,5 +1,8 @@
 from dataclasses import dataclass, field
+from typing import Optional
+
 from hydra.core.config_store import ConfigStore
+
 from vla_scratch.policies.config import PolicyConfig
 from vla_scratch.policies.modules.action_expert.cross_attention_dit import (
     DiTConfig,
@@ -10,6 +13,7 @@ from vla_scratch.policies.modules.action_expert.cross_attention_dit import (
 class PiConfig(PolicyConfig):
     vlm_type: str
     model_id: str
+    vlm_weight_metadata: Optional[dict[str, str]] = None
 
     action_expert_cfg: DiTConfig = field(
         default_factory=lambda: DiTConfig(
@@ -62,6 +66,40 @@ pi_paligemma_config = PiConfig(
             "model_id": "google/paligemma-3b-mix-224",
             "max_length": 550,
             "target_size": (224, 224),
+        }
+    ],
+)
+
+pi05_config = PiConfig(
+    _target_="vla_scratch.policies.pi.policy.PiPolicy",
+    model_id="lerobot/pi05_base",
+    vlm_type="Pi05VLM",
+    state_history=1,
+    action_horizon=10,
+    num_noise_per_sample=1,
+    ce_loss_weight=0.0,
+    # Match the π0.5 Gemma expert's 18-layer, 8-head/1-KV-head compute
+    # budget while retaining the cross-attention DiT architecture.
+    action_expert_cfg=DiTConfig(
+        hidden_size=1024,
+        intermediate_size=4096,
+        num_attention_heads=8,
+        num_key_value_heads=1,
+        head_dim=256,
+        num_hidden_layers=9,
+        cross_attention_every=2,
+        only_attend_to_final_layer=True,
+    ),
+    transforms=[
+        {
+            "_target_": "vla_scratch.policies.modules.vlm_bridge.pi05.processor.Pi05Processor",
+            # This is the text-token budget; image tokens are
+            # added dynamically for every camera.
+            "max_length": 200,
+            "target_size": (224, 224),
+            "augment_images": True,
+            # LIBERO stacks front then wrist. Override for other camera layouts.
+            "front_camera_indices": (0,),
         }
     ],
 )
@@ -122,6 +160,7 @@ pi_smolvlm_config = PiConfig(
 
 cs = ConfigStore.instance()
 cs.store(name="pi-paligemma", node=pi_paligemma_config, group="policy")
+cs.store(name="pi05", node=pi05_config, group="policy")
 cs.store(name="pi-paligemma2", node=pi_paligemma2_config, group="policy")
 cs.store(name="pi-qwen", node=pi_qwen_config, group="policy")
 cs.store(name="pi-smol", node=pi_smolvlm_config, group="policy")
