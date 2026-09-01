@@ -32,7 +32,14 @@ if TYPE_CHECKING:
 
 
 class PaligemmaBridge(VLMBridge):
-    def __init__(self, *, model_id: str, vlm_type: str, max_length: int = 64):
+    def __init__(
+        self,
+        *,
+        model_id: str,
+        vlm_type: str,
+        compile_layers: bool = True,
+        max_length: int = 64,
+    ):
         super().__init__()
         self.max_length = max_length
 
@@ -58,6 +65,9 @@ class PaligemmaBridge(VLMBridge):
         self.tokenizer = self.processor.tokenizer
 
         replace_paligemma_forward()
+        if compile_layers:
+            for layer in self.causal_model.model.language_model.layers:
+                layer.forward = torch.compile(layer.forward, dynamic=False)
 
     def apply_fsdp(self, mp_policy, mesh):
         fully_shard_layers(

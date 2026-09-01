@@ -13,6 +13,7 @@ from vla_scratch.policies.modules.action_expert.cross_attention_dit import (
 class PiConfig(PolicyConfig):
     vlm_type: str
     model_id: str
+    compile_vlm_layers: bool = True
     vlm_weight_metadata: Optional[dict[str, str]] = None
 
     action_expert_cfg: DiTConfig = field(

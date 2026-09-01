@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 
 class Pi05Bridge(VLMBridge):
-    def __init__(self):
+    def __init__(self, *, compile_layers: bool = True):
         super().__init__()
         from transformers import (
             PaliGemmaConfig,
@@ -55,6 +55,10 @@ class Pi05Bridge(VLMBridge):
             layer.bridge_forward = MethodType(  # type: ignore[attr-defined]
                 gemma_decoder_layer_forward, layer
             )
+            if compile_layers:
+                layer.bridge_forward = torch.compile(  # type: ignore[attr-defined]
+                    layer.bridge_forward, dynamic=False
+                )
         vision_layers = (
             self.causal_model.vision_tower.vision_model.encoder.layers
         )

@@ -69,9 +69,12 @@ class PiPolicy(BasePolicy):
             self.vlm_bridge = PaligemmaBridge(
                 model_id=config.model_id,
                 vlm_type=config.vlm_type,
+                compile_layers=config.compile_vlm_layers,
             )
         elif config.vlm_type == "Pi05VLM":
-            self.vlm_bridge = Pi05Bridge()
+            self.vlm_bridge = Pi05Bridge(
+                compile_layers=config.compile_vlm_layers
+            )
             config.vlm_weight_metadata = (
                 self.vlm_bridge.weight_metadata
             )
@@ -79,11 +82,13 @@ class PiPolicy(BasePolicy):
             self.vlm_bridge = Qwen3VLBridge(
                 model_id=config.model_id,
                 vlm_type=config.vlm_type,
+                compile_layers=config.compile_vlm_layers,
             )
         elif config.vlm_type == "SmolVLMForConditionalGeneration":
             self.vlm_bridge = SmolVLMBridge(
                 model_id=config.model_id,
                 vlm_type=config.vlm_type,
+                compile_layers=config.compile_vlm_layers,
             )
         else:
             raise NotImplementedError(

@@ -22,6 +22,10 @@
 
 ## Optimizations
 
+PaliGemma, Qwen3-VL, and SmolVLM text decoder layers use `torch.compile` by
+default. Set `policy.compile_vlm_layers=false` only when debugging a compiler
+or backend incompatibility.
+
 
 <table>
 <tr>
@@ -103,4 +107,3 @@ Related code in HF Transformers:
 </td>
 </tr>
 </table>
-

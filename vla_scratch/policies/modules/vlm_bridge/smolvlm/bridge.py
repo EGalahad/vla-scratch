@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib
 from typing import Dict, Optional, Tuple, TYPE_CHECKING
-from copy import copy
+from types import MethodType
 
 import torch
+from torch.distributed.fsdp._fully_shard import register_fsdp_forward_method
 
 from vla_scratch.policies.modules.vlm_bridge.smolvlm.utils import (
+    _smolvlm_text_decoder_layer_forward,
     replace_context,
 )
 from vla_scratch.policies.utils.training import (
@@ -31,7 +33,9 @@ if TYPE_CHECKING:
 
 
 class SmolVLMBridge(VLMBridge):
-    def __init__(self, *, model_id: str, vlm_type: str):
+    def __init__(
+        self, *, model_id: str, vlm_type: str, compile_layers: bool = True
+    ):
         super().__init__()
         tfm = importlib.import_module("transformers")
         try:
@@ -55,6 +59,15 @@ class SmolVLMBridge(VLMBridge):
         if hasattr(self.processor, "tokenizer"):
             self.processor.tokenizer.padding_side = "left"
 
+        for layer in self.causal_model.model.text_model.layers:
+            layer.bridge_forward = MethodType(  # type: ignore[attr-defined]
+                _smolvlm_text_decoder_layer_forward, layer
+            )
+            if compile_layers:
+                layer.bridge_forward = torch.compile(  # type: ignore[attr-defined]
+                    layer.bridge_forward, dynamic=False
+                )
+
     def apply_fsdp(self, mp_policy, mesh):
         fully_shard_layers(
             self.causal_model.model.vision_model.encoder.layers,
@@ -62,12 +75,10 @@ class SmolVLMBridge(VLMBridge):
             mp_policy,
             num_to_prefetch=6,
         )
-        fully_shard_layers(
-            self.causal_model.model.text_model.layers,
-            mesh,
-            mp_policy,
-            num_to_prefetch=6,
-        )
+        text_layers = self.causal_model.model.text_model.layers
+        fully_shard_layers(text_layers, mesh, mp_policy, num_to_prefetch=6)
+        for layer in text_layers:
+            register_fsdp_forward_method(layer, "bridge_forward")
 
     def get_text_dims(self) -> Tuple[int, int, int]:
         cfg = self.causal_model.config.text_config
@@ -204,11 +215,12 @@ class SmolVLMBridge(VLMBridge):
             # past_key_values_this_layer = copy(past_key_values)
             outputs = apply_checkpoint_when_training(
                 self,
-                decoder_layer,
+                decoder_layer.bridge_forward,
                 hidden_states,
                 attention_mask=causal_mask,
                 # past_key_values=past_key_values_this_layer,
                 position_embeddings=position_embeddings,
+                disable=True,
             )
             torch.cuda.nvtx.range_pop()
             # layer_cache = past_key_values_this_layer.layers.pop(-1)

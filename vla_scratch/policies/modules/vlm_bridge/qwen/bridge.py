@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import importlib
 from copy import copy
+from types import MethodType
 from typing import List, Optional, Tuple, TYPE_CHECKING, Dict, cast
 
 import einops
 import torch
+from torch.distributed.fsdp._fully_shard import register_fsdp_forward_method
 
 from vla_scratch.policies.utils.training import (
     apply_checkpoint_when_training,
@@ -20,6 +22,7 @@ from vla_scratch.policies.modules.vlm_bridge.qwen.processor import (
     QwenPolicyInput,
 )
 from vla_scratch.policies.modules.vlm_bridge.qwen.utils import (
+    _qwen_text_decoder_layer_custom_forward,
     is_qwen3vl_forward_replaced,
     replace_qwen3vl_forward,
 )
@@ -40,7 +43,9 @@ QWEN3_VL_MASKED_ADD_STACK = True
 
 
 class Qwen3VLBridge(VLMBridge):
-    def __init__(self, *, model_id: str, vlm_type: str):
+    def __init__(
+        self, *, model_id: str, vlm_type: str, compile_layers: bool = True
+    ):
         super().__init__()
         tfm = importlib.import_module("transformers")
         try:
@@ -68,14 +73,23 @@ class Qwen3VLBridge(VLMBridge):
         replace_qwen3vl_forward()
         visual: "Qwen3VLVisionModel" = self.causal_model.model.visual
         visual.prepared_freq_table = visual.rotary_pos_emb(128)
+        for layer in self.causal_model.model.language_model.layers:
+            layer.bridge_forward = MethodType(  # type: ignore[attr-defined]
+                _qwen_text_decoder_layer_custom_forward, layer
+            )
+            if compile_layers:
+                layer.bridge_forward = torch.compile(  # type: ignore[attr-defined]
+                    layer.bridge_forward, dynamic=False
+                )
 
     def apply_fsdp(self, mp_policy, mesh):
         fully_shard_layers(
             self.causal_model.model.visual.blocks, mesh, mp_policy
         )
-        fully_shard_layers(
-            self.causal_model.model.language_model.layers, mesh, mp_policy
-        )
+        text_layers = self.causal_model.model.language_model.layers
+        fully_shard_layers(text_layers, mesh, mp_policy)
+        for layer in text_layers:
+            register_fsdp_forward_method(layer, "bridge_forward")
 
     def get_text_dims(self) -> Tuple[int, int, int]:
         cfg = self.causal_model.config.text_config
@@ -219,7 +233,7 @@ class Qwen3VLBridge(VLMBridge):
             )
             outputs = apply_checkpoint_when_training(
                 self,
-                decoder_layer,
+                decoder_layer.bridge_forward,
                 hidden_states,
                 attention_mask=prefix_att_mask,
                 position_embeddings=position_emb,
