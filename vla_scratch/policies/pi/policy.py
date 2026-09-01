@@ -235,7 +235,6 @@ class PiPolicy(BasePolicy):
             cast_forward_inputs=True,
         )
         fully_shard(self, mesh=mesh, mp_policy=mp_policy_root)
-        register_fsdp_forward_method(self, "compute_loss")
         # will c10 error if below is not registered
         register_fsdp_forward_method(self, "encode_prefix")
         register_fsdp_forward_method(self, "predict_suffix")

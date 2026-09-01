@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
+import random
 import time
 from typing import cast, Any, Optional, List, Tuple, TYPE_CHECKING
 from tqdm import tqdm
@@ -30,6 +31,8 @@ from vla_scratch.helpers.training import (
     eval_generation,
     eval_sample_mse,
     log_model_state_sizes,
+    gradient_accumulation_context,
+    linear_warmup_factor,
     print_with_rank,
     setup_dist,
     EagerEpochIterator,
@@ -52,7 +55,7 @@ if TYPE_CHECKING:
 
 torch._dynamo.config.recompile_limit = 64
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-torch.set_float32_matmul_precision("high")
+torch.set_float32_matmul_precision("highest")
 
 
 @dataclass
@@ -75,9 +78,10 @@ class TrainConfig:
     )
 
     # data loader
-    num_workers: int = 4
+    num_workers: int = 8
     prefetch_factor: int = 2
     split_seed: int = 42
+    seed: int = 42
     epoch_iterator: str = "eager"  # "prefetch" or "eager"
     # optimization
     batch_size: int = 16
@@ -92,6 +96,7 @@ class TrainConfig:
     betas: Tuple[float] = (0.99, 0.9999)
     eps: float = 1e-8
     weight_decay: float = 1e-4
+    warmup_steps: int = 0
 
     clip_grad_norm: float = 1.0
 
@@ -100,6 +105,7 @@ class TrainConfig:
     log_interval: int = 32
     eval_interval: int = 512
     epochs: int = 20
+    max_steps: Optional[int] = None
     save_interval: int = 10  # in epochs
 
     # data
@@ -164,6 +170,9 @@ def main(cfg: DictConfig) -> None:
 
     local_rank, global_rank, world_size, mesh = setup_dist()
     device = torch.device(type="cuda", index=local_rank)
+    random.seed(train_cfg.seed)
+    torch.manual_seed(train_cfg.seed)
+    torch.cuda.manual_seed_all(train_cfg.seed)
 
     if local_rank == 0:
         art.tprint("VLA-SCRATCH", font="big")
@@ -198,6 +207,10 @@ def main(cfg: DictConfig) -> None:
     loss, _ = policy.compute_loss(dummy_data)
     loss.backward()
 
+    # The dummy pass may consume random numbers differently across ranks.
+    # Reset before initialization so every rank starts from identical weights.
+    torch.manual_seed(train_cfg.seed)
+    torch.cuda.manual_seed_all(train_cfg.seed)
     policy.initialize_weights()
     if train_cfg.low_mem:
         policy = policy.bfloat16()
@@ -238,6 +251,12 @@ def main(cfg: DictConfig) -> None:
         foreach=False,
         fused=True,
     )
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=lambda step: linear_warmup_factor(
+            step, train_cfg.warmup_steps
+        ),
+    )
     log_model_state_sizes(model, optimizer)
 
     if train_cfg.checkpoint_path is not None:
@@ -246,6 +265,7 @@ def main(cfg: DictConfig) -> None:
             checkpoint=train_cfg.checkpoint_path,
             global_rank=global_rank,
             optimizer=optimizer if train_cfg.load_optimizer else None,
+            scheduler=scheduler if train_cfg.load_optimizer else None,
         )
         if local_rank == 0:
             print(f"Loaded checkpoint '{train_cfg.checkpoint_path}'")
@@ -267,18 +287,37 @@ def main(cfg: DictConfig) -> None:
         run.config.update(OmegaConf.to_container(saved_cfg, resolve=True))
 
         default_run_name = f"{train_cfg.exp_name}-{datetime.datetime.now().strftime('%m-%d-%H-%M')}"
-        run_idx = run.name.split("-")[-1]
+        run_idx = (run.name or run.id).split("-")[-1]
         run.name = f"{run_idx}-{default_run_name}"
 
         cfg_path = save_cfg_yaml(saved_cfg, run_dir)
         run.save(str(cfg_path), base_path=str(run_dir))
 
-    global_step = 0
+    global_step = max(scheduler.last_epoch, 0)
+    start_epoch = 0
+    checkpoint_name = ""
+    if train_cfg.checkpoint_path is not None:
+        checkpoint_name = Path(train_cfg.checkpoint_path).name
+        if checkpoint_name.startswith(
+            "checkpoint_"
+        ) and not checkpoint_name.startswith("checkpoint_step_"):
+            try:
+                start_epoch = int(checkpoint_name.rsplit("_", 1)[-1])
+            except ValueError:
+                pass
     steps_per_epoch_by_name = {
         name: max(1, len(loader) // train_cfg.grad_accum_steps)
         for name, loader in train_loaders.items()
     }
     steps_per_epoch = min(steps_per_epoch_by_name.values())
+    if checkpoint_name.startswith("checkpoint_step_"):
+        start_epoch = global_step // steps_per_epoch
+    if train_cfg.max_steps is not None and global_step >= train_cfg.max_steps:
+        print_with_rank(
+            f"Checkpoint is already at step {global_step} (max_steps={train_cfg.max_steps}); nothing to do."
+        )
+        dist.destroy_process_group()
+        return
     last_time = time.perf_counter()
     log_tds = []
 
@@ -291,13 +330,22 @@ def main(cfg: DictConfig) -> None:
             f"Unsupported epoch_iterator '{train_cfg.epoch_iterator}', expected 'eager' or 'prefetch'."
         )
     epoch_iterators = {
-        name: epoch_iterator_cls(dataloader=loader, num_epochs=train_cfg.epochs)
+        name: epoch_iterator_cls(
+            dataloader=loader,
+            num_epochs=train_cfg.epochs,
+            start_epoch=start_epoch,
+        )
         for name, loader in train_loaders.items()
     }
     torch.cuda.empty_cache()
 
     print_with_rank(emoji.emojize(":rocket: Starting training..."))
-    for epoch in range(train_cfg.epochs):
+    # Training randomness should differ by rank while remaining reproducible.
+    random.seed(train_cfg.seed + global_rank)
+    torch.manual_seed(train_cfg.seed + global_rank)
+    torch.cuda.manual_seed_all(train_cfg.seed + global_rank)
+    stop_training = False
+    for epoch in range(start_epoch, train_cfg.epochs):
         data_loader_iters = {
             name: next(epoch_iterator)
             for name, epoch_iterator in epoch_iterators.items()
@@ -312,14 +360,14 @@ def main(cfg: DictConfig) -> None:
         model.train()
         for i in pbar:
             torch.cuda.nvtx.range_push("Zero Grad")
-            if not train_cfg.use_ddp:
-                model.unshard()
             optimizer.zero_grad(set_to_none=True)
             torch.cuda.nvtx.range_pop()
 
             log_td = {}
-            for _ in range(train_cfg.grad_accum_steps):
-                for train_key, data_loader_iter in data_loader_iters.items():
+            for microstep in range(train_cfg.grad_accum_steps):
+                for loader_idx, (train_key, data_loader_iter) in enumerate(
+                    data_loader_iters.items()
+                ):
                     torch.cuda.nvtx.range_push("DataLoader")
                     data_sample, perf_dict = next(data_loader_iter)
                     data_sample: "DataSample" = data_sample.to(
@@ -330,10 +378,17 @@ def main(cfg: DictConfig) -> None:
                     )
                     torch.cuda.nvtx.range_pop()
 
-                    loss, log_dict = policy.compute_loss(data_sample)
-                    torch.cuda.nvtx.range_push("Loss Backward")
-                    (loss / train_cfg.grad_accum_steps / world_size).backward()
-                    torch.cuda.nvtx.range_pop()
+                    sync = (
+                        microstep == train_cfg.grad_accum_steps - 1
+                        and loader_idx == len(data_loader_iters) - 1
+                    )
+                    with gradient_accumulation_context(
+                        model, sync=sync, use_ddp=train_cfg.use_ddp
+                    ):
+                        loss, log_dict = model(data_sample)
+                        torch.cuda.nvtx.range_push("Loss Backward")
+                        (loss / train_cfg.grad_accum_steps).backward()
+                        torch.cuda.nvtx.range_pop()
 
                     log_dict = {
                         f"{key.split('/')[0]}/{train_key}.{key.split('/')[1]}": val
@@ -351,6 +406,7 @@ def main(cfg: DictConfig) -> None:
                 model.parameters(), max_norm=train_cfg.clip_grad_norm
             )
             optimizer.step()
+            scheduler.step()
             torch.cuda.nvtx.range_pop()
 
             if not train_cfg.use_ddp:
@@ -397,8 +453,6 @@ def main(cfg: DictConfig) -> None:
                     and len(eval_loaders) > 0
                 ):
                     model.eval()
-                    if not train_cfg.use_ddp:
-                        model.unshard()
                     for eval_key, (
                         eval_dataloader,
                         eval_type,
@@ -427,7 +481,6 @@ def main(cfg: DictConfig) -> None:
                             log_td_mean[f"eval/{eval_key}.{metric_name}"] = (
                                 eval_metrics[metric_name]
                             )
-                    model.reshard()
                     model.train()
 
                 log_dict.update(aggregate_tensordict(log_td_mean, world_size))
@@ -449,16 +502,30 @@ def main(cfg: DictConfig) -> None:
                 # Synchronize all processes (only in distributed mode)
                 if dist.is_initialized():
                     dist.barrier()
-        #     if i == 36:
-        #         break
-        # break
+            if (
+                train_cfg.max_steps is not None
+                and global_step >= train_cfg.max_steps
+            ):
+                stop_training = True
+                break
 
-        if (epoch + 1) % train_cfg.save_interval == 0 or (
+        save_name = (
+            f"checkpoint_step_{global_step}"
+            if stop_training
+            else f"checkpoint_{epoch + 1}"
+        )
+        if stop_training or (epoch + 1) % train_cfg.save_interval == 0 or (
             epoch + 1
         ) == train_cfg.epochs:
             save_checkpoint(
-                model, optimizer, global_rank, f"checkpoint_{epoch + 1}"
+                model,
+                optimizer,
+                global_rank,
+                save_name,
+                scheduler=scheduler,
             )
+        if stop_training:
+            break
 
     for epoch_iterator in epoch_iterators.values():
         if hasattr(epoch_iterator, "finalize"):

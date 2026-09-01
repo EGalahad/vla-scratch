@@ -14,6 +14,12 @@ if TYPE_CHECKING:
 class BasePolicy(nn.Module, ABC):
     """Minimal policy interface required by training/eval/serving scripts."""
 
+    def forward(
+        self,
+        data_sample: "DataSample",
+    ) -> Tuple[torch.Tensor, Dict]:
+        return self.compute_loss(data_sample)
+
     def initialize_weights(self):
         pass
 

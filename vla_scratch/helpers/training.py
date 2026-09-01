@@ -4,6 +4,7 @@ import copy
 import itertools
 import hashlib
 import json
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from collections.abc import Mapping as ABCMapping
@@ -86,6 +87,35 @@ def setup_dist():
     return local_rank, global_rank, world_size, mesh
 
 
+def linear_warmup_factor(step: int, warmup_steps: int) -> float:
+    """Return a shared linear warmup multiplier for all optimizer groups."""
+    if warmup_steps <= 0:
+        return 1.0
+    return min((step + 1) / warmup_steps, 1.0)
+
+
+@contextmanager
+def gradient_accumulation_context(
+    model: torch.nn.Module, *, sync: bool, use_ddp: bool
+):
+    """Skip distributed gradient communication on intermediate microsteps."""
+    if sync:
+        yield
+        return
+    if use_ddp:
+        with model.no_sync():  # type: ignore[operator]
+            yield
+        return
+
+    model.set_requires_gradient_sync(False)  # type: ignore[attr-defined]
+    model.set_reshard_after_backward(False)  # type: ignore[attr-defined]
+    try:
+        yield
+    finally:
+        model.set_requires_gradient_sync(True)  # type: ignore[attr-defined]
+        model.set_reshard_after_backward(True)  # type: ignore[attr-defined]
+
+
 def print_with_rank(string: str) -> None:
     print(f"[Rank {global_rank}] {string}")
 
@@ -99,6 +129,7 @@ def _create_dataloader(
     world_size: int,
     global_rank: int,
 ) -> DataLoader:
+    seed = getattr(train_cfg, "seed", train_cfg.split_seed)
     base_sampler = getattr(dataset, "sampler", None)
     distributed_batch_sampler = None
 
@@ -119,6 +150,7 @@ def _create_dataloader(
                 rank=global_rank,
                 shuffle=shuffle,
                 drop_last=shuffle,
+                seed=seed,
             )
     else:
         sampler = base_sampler
@@ -131,6 +163,7 @@ def _create_dataloader(
         persistent_workers=train_cfg.num_workers > 0,
         pin_memory=torch.cuda.is_available(),
         collate_fn=collate_fn,
+        generator=torch.Generator().manual_seed(seed + global_rank),
     )
     if train_cfg.num_workers > 0:
         loader_kwargs["prefetch_factor"] = train_cfg.prefetch_factor
@@ -274,6 +307,9 @@ def build_param_lr_groups(
     lr_cfg: Mapping[str, float],
 ) -> list[dict[str, Any]]:
     """Create optimizer parameter groups from a learning-rate mapping."""
+    config_root = model.module if isinstance(
+        model, torch.nn.parallel.DistributedDataParallel
+    ) else model
     if not lr_cfg:
         return [{"params": list(model.parameters()), "name": "base"}]
 
@@ -285,7 +321,7 @@ def build_param_lr_groups(
         if module_path == "base":
             continue
         try:
-            module = model
+            module = config_root
             for attr in module_path.split("."):
                 module = getattr(module, attr)
         except AttributeError:
@@ -558,18 +594,19 @@ class PrefetchingEpochIterator(Iterator[Iterator]):
         dataloader: DataLoader,
         num_epochs: int,
         *,
+        start_epoch: int = 0,
         max_workers: int = 1,
     ):
         # self.iterator_fn = iterator_fn
         self.dataloader = dataloader
         self.num_epochs = num_epochs
-        self.epoch_idx = 0
+        self.epoch_idx = start_epoch
         self.current_iter: Optional[Iterator] = None
 
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
         self.prefetched_iter: Optional[Iterator] = None
 
-        self._submit_prefetch(0)
+        self._submit_prefetch(start_epoch)
 
     def __iter__(self) -> "PrefetchingEpochIterator":
         return self
@@ -593,8 +630,7 @@ class PrefetchingEpochIterator(Iterator[Iterator]):
         if epoch_idx >= self.num_epochs:
             return
         dataloader = copy.copy(self.dataloader)
-        if isinstance(dataloader.sampler, DistributedSampler):
-            dataloader.sampler.set_epoch(epoch_idx)
+        _set_dataloader_epoch(dataloader, epoch_idx)
         self.prefetched_iter = iter(dataloader)
         # return self.executor.submit(
         #     lambda: next(self.prefetched_iter),
@@ -625,10 +661,12 @@ class EagerEpochIterator(Iterator[Iterator]):
         self,
         dataloader: DataLoader,
         num_epochs: int,
+        *,
+        start_epoch: int = 0,
     ):
         self.dataloader = dataloader
         self.num_epochs = num_epochs
-        self.epoch_idx = 0
+        self.epoch_idx = start_epoch
         self.current_iter: Optional[Iterator] = None
 
     def __iter__(self) -> "EagerEpochIterator":
@@ -640,8 +678,7 @@ class EagerEpochIterator(Iterator[Iterator]):
 
         self._cleanup_prev_iter()
         dataloader = self.dataloader
-        if isinstance(dataloader.sampler, DistributedSampler):
-            dataloader.sampler.set_epoch(self.epoch_idx)
+        _set_dataloader_epoch(dataloader, self.epoch_idx)
         iterator = iter(dataloader)
         self.current_iter = iterator
         self.epoch_idx += 1
@@ -659,3 +696,19 @@ class EagerEpochIterator(Iterator[Iterator]):
 
     def finalize(self) -> None:
         self._cleanup_prev_iter()
+
+
+def _set_dataloader_epoch(dataloader: DataLoader, epoch: int) -> None:
+    """Advance distributed samplers, including wrapped batch samplers."""
+    candidates = [dataloader.sampler, dataloader.batch_sampler]
+    batch_sampler = dataloader.batch_sampler
+    if hasattr(batch_sampler, "batch_sampler"):
+        candidates.append(batch_sampler.batch_sampler.sampler)
+    seen: set[int] = set()
+    for sampler in candidates:
+        if id(sampler) in seen:
+            continue
+        seen.add(id(sampler))
+        set_epoch = getattr(sampler, "set_epoch", None)
+        if callable(set_epoch):
+            set_epoch(epoch)

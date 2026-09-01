@@ -161,6 +161,7 @@ def load_checkpoint(
     checkpoint: str | Path,
     global_rank: int,
     optimizer: Optional[torch.optim.Optimizer] = None,
+    scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
     """Distributed-aware checkpoint load for directory checkpoints.
 
@@ -192,7 +193,9 @@ def load_checkpoint(
         optim_sd = {}
 
     options = StateDictOptions(
-        full_state_dict=True, broadcast_from_rank0=True, strict=False
+        full_state_dict=True,
+        broadcast_from_rank0=torch.distributed.is_initialized(),
+        strict=False,
     )
     missing, unexpected = set_model_state_dict(
         model=model,
@@ -233,6 +236,11 @@ def load_checkpoint(
             optim_state_dict=optim_sd,
             options=options,
         )
+        scheduler_path = p / "scheduler.pt"
+        if scheduler is not None and scheduler_path.exists():
+            scheduler.load_state_dict(
+                torch.load(scheduler_path, map_location="cpu", weights_only=True)
+            )
     return tuple(missing), tuple(unexpected)
 
 
@@ -241,27 +249,13 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer,
     global_rank: int,
     filename: str | Path,
+    scheduler: Optional[torch.optim.lr_scheduler.LRScheduler] = None,
 ):
     """Save checkpoint as a directory with model.pt and optimizer.pt.
 
     `filename` should be the checkpoint directory name, e.g.,
     `checkpoint_5`. If a file extension is provided, it will be stripped.
     """
-
-    def _cast_float_tensors_to_bfloat16(obj: Any) -> Any:
-        if isinstance(obj, torch.Tensor):
-            return (
-                obj.to(dtype=torch.bfloat16) if obj.is_floating_point() else obj
-            )
-        if isinstance(obj, dict):
-            return {
-                k: _cast_float_tensors_to_bfloat16(v) for k, v in obj.items()
-            }
-        if isinstance(obj, list):
-            return [_cast_float_tensors_to_bfloat16(v) for v in obj]
-        if isinstance(obj, tuple):
-            return tuple(_cast_float_tensors_to_bfloat16(v) for v in obj)
-        return obj
 
     options = StateDictOptions(full_state_dict=True, cpu_offload=True)
     model_state_dict, optim_state_dict = get_state_dict(
@@ -271,8 +265,6 @@ def save_checkpoint(
     )
 
     if global_rank == 0:
-        model_state_dict = _cast_float_tensors_to_bfloat16(model_state_dict)
-        optim_state_dict = _cast_float_tensors_to_bfloat16(optim_state_dict)
         base = Path(filename)
         # Strip extension if provided (for backward compatibility)
         if base.suffix:
@@ -282,7 +274,9 @@ def save_checkpoint(
         optim_file = base / "optimizer.pt"
         torch.save(model_state_dict, model_file)
         torch.save(optim_state_dict, optim_file)
-        print(f"Saved checkpoint to {base} (model.pt, optimizer.pt)")
+        if scheduler is not None:
+            torch.save(scheduler.state_dict(), base / "scheduler.pt")
+        print(f"Saved checkpoint to {base}")
 
 
 def save_cfg_yaml(saved_cfg: DictConfig, run_dir: Path | str) -> Path:
